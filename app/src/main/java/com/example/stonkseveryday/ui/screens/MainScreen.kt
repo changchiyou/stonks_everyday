@@ -10,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.stonkseveryday.data.model.StockSummary
@@ -26,7 +27,9 @@ fun MainScreen(
     summary: StockSummary,
     onAddTransaction: () -> Unit,
     onTransactionClick: (StockTransaction) -> Unit,
-    onOpenSettings: () -> Unit
+    onHoldingClick: (com.example.stonkseveryday.data.model.StockHolding) -> Unit,
+    onOpenSettings: () -> Unit,
+    showHoldingsView: Boolean = true
 ) {
     Scaffold(
         topBar = {
@@ -64,20 +67,38 @@ fun MainScreen(
                 SummaryCard(summary = summary)
             }
 
-            item {
-                Text(
-                    text = "交易記錄",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-            }
+            if (showHoldingsView) {
+                item {
+                    Text(
+                        text = "持股明細",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                }
 
-            items(transactions) { transaction ->
-                TransactionItem(
-                    transaction = transaction,
-                    onClick = { onTransactionClick(transaction) }
-                )
+                items(summary.holdings) { holding ->
+                    HoldingItem(
+                        holding = holding,
+                        onClick = { onHoldingClick(holding) }
+                    )
+                }
+            } else {
+                item {
+                    Text(
+                        text = "交易記錄",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                }
+
+                items(transactions) { transaction ->
+                    TransactionItem(
+                        transaction = transaction,
+                        onClick = { onTransactionClick(transaction) }
+                    )
+                }
             }
 
             item {
@@ -90,6 +111,8 @@ fun MainScreen(
 @Composable
 fun SummaryCard(summary: StockSummary) {
     val currencyFormat = NumberFormat.getCurrencyInstance(Locale("zh", "TW"))
+    val configuration = LocalConfiguration.current
+    val isSmallScreen = configuration.screenWidthDp < 360
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -100,43 +123,59 @@ fun SummaryCard(summary: StockSummary) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(if (isSmallScreen) 12.dp else 16.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isSmallScreen) 8.dp else 12.dp)
         ) {
-            Text(
-                text = "總覽",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-
+            // 第一行：總資產、淨資產、今日損益
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "總收入",
-                        style = MaterialTheme.typography.bodyMedium,
+                        text = "總資產",
+                        style = if (isSmallScreen) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                     )
                     Text(
-                        text = currencyFormat.format(summary.totalIncome),
-                        style = MaterialTheme.typography.titleLarge,
+                        text = currencyFormat.format(summary.totalAssets),
+                        style = if (isSmallScreen) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
-                Column(horizontalAlignment = Alignment.End) {
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = "當日損益",
-                        style = MaterialTheme.typography.bodyMedium,
+                        text = "淨資產",
+                        style = if (isSmallScreen) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                     )
                     Text(
-                        text = currencyFormat.format(summary.dailyProfitLoss),
-                        style = MaterialTheme.typography.titleLarge,
+                        text = currencyFormat.format(summary.netAssets),
+                        style = if (isSmallScreen) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "今日損益",
+                        style = if (isSmallScreen) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        text = "${if (summary.todayProfitLoss >= 0) "+" else ""}${currencyFormat.format(summary.todayProfitLoss)}",
+                        style = if (isSmallScreen) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = if (summary.dailyProfitLoss >= 0)
+                        color = if (summary.todayProfitLoss >= 0)
+                            MaterialTheme.colorScheme.tertiary
+                        else
+                            MaterialTheme.colorScheme.error
+                    )
+                    Text(
+                        text = "${if (summary.todayProfitLossPercent >= 0) "+" else ""}${"%.2f".format(summary.todayProfitLossPercent)}%",
+                        style = if (isSmallScreen) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodySmall,
+                        color = if (summary.todayProfitLoss >= 0)
                             MaterialTheme.colorScheme.tertiary
                         else
                             MaterialTheme.colorScheme.error
@@ -146,23 +185,34 @@ fun SummaryCard(summary: StockSummary) {
 
             HorizontalDivider()
 
+            // 第二行：總未實現損益
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "總損益",
+                    text = "總未實現損益",
                     style = MaterialTheme.typography.bodyMedium
                 )
-                Text(
-                    text = currencyFormat.format(summary.totalProfitLoss),
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = if (summary.totalProfitLoss >= 0)
-                        MaterialTheme.colorScheme.tertiary
-                    else
-                        MaterialTheme.colorScheme.error
-                )
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "${if (summary.totalProfitLoss >= 0) "+" else ""}${currencyFormat.format(summary.totalProfitLoss)}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (summary.totalProfitLoss >= 0)
+                            MaterialTheme.colorScheme.tertiary
+                        else
+                            MaterialTheme.colorScheme.error
+                    )
+                    Text(
+                        text = "${if (summary.totalProfitLossPercent >= 0) "+" else ""}${"%.2f".format(summary.totalProfitLossPercent)}%",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (summary.totalProfitLoss >= 0)
+                            MaterialTheme.colorScheme.tertiary
+                        else
+                            MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
     }
@@ -249,6 +299,171 @@ fun TransactionItem(
                     else
                         MaterialTheme.colorScheme.tertiary
                 )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HoldingItem(
+    holding: com.example.stonkseveryday.data.model.StockHolding,
+    onClick: () -> Unit
+) {
+    val currencyFormat = NumberFormat.getCurrencyInstance(Locale("zh", "TW"))
+    val configuration = LocalConfiguration.current
+    val isSmallScreen = configuration.screenWidthDp < 360
+
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(if (isSmallScreen) 12.dp else 16.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isSmallScreen) 6.dp else 8.dp)
+        ) {
+            // 第一行：股票代碼、股票名稱、損益百分比
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = holding.stockCode,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = holding.stockName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+
+                Text(
+                    text = "${if (holding.profitLossPercentage >= 0) "+" else ""}${"%.2f".format(holding.profitLossPercentage)}%",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = if (holding.profitLoss >= 0)
+                        MaterialTheme.colorScheme.tertiary
+                    else
+                        MaterialTheme.colorScheme.error
+                )
+            }
+
+            HorizontalDivider()
+
+            // 第二行：股數、成本價、現價
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "股數",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "${holding.quantity}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "成本價",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "${"%.2f".format(holding.averageCost)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "現價",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "${"%.2f".format(holding.currentPrice)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            // 第三行：現值、損益、持股比重
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "現值",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = currencyFormat.format(holding.currentValue),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "損益",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "${if (holding.profitLoss >= 0) "+" else ""}${currencyFormat.format(holding.profitLoss)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = if (holding.profitLoss >= 0)
+                            MaterialTheme.colorScheme.tertiary
+                        else
+                            MaterialTheme.colorScheme.error
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "持股比重",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "${"%.2f".format(holding.positionRatio)}%",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            // 如果有股利，顯示股利資訊
+            if (holding.totalDividends > 0) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Text(
+                        text = "累計股利: ${currencyFormat.format(holding.totalDividends)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
             }
         }
     }

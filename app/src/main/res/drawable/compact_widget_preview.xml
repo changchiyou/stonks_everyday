@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 背景 -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#F5F5F5" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+
+    <!-- 內容區域 -->
+    <item android:gravity="center">
+        <vector
+            android:width="110dp"
+            android:height="110dp"
+            android:viewportWidth="110"
+            android:viewportHeight="110">
+
+            <!-- 圖示 -->
+            <path
+                android:fillColor="#1976D2"
+                android:pathData="M50,20 L60,20 L60,30 L50,30 Z" />
+
+            <!-- 金額顯示 -->
+            <path
+                android:fillColor="#2E7D32"
+                android:pathData="M30,45 L80,45 L80,65 L30,65 Z" />
+
+            <!-- K 標示 -->
+            <path
+                android:fillColor="#757575"
+                android:pathData="M85,50 L90,50 L90,60 L85,60 Z" />
+        </vector>
+    </item>
+
+    <!-- 刷新圖示 -->
+    <item
+        android:width="16dp"
+        android:height="16dp"
+        android:gravity="top|end"
+        android:right="6dp"
+        android:top="6dp">
+        <shape android:shape="oval">
+            <solid android:color="#4CAF50" />
+        </shape>
+    </item>
+</layer-list>

@@ -18,7 +18,8 @@ data class StockTransaction(
     val pricePerShare: Double,
     val transactionDate: Long = Date().time,
     val fee: Double = 0.0,
-    val tax: Double = 0.0
+    val tax: Double = 0.0,
+    val isEtf: Boolean = false  // 是否為 ETF
 ) : Parcelable {
     val totalAmount: Double
         get() = quantity * pricePerShare + fee + tax

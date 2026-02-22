@@ -19,16 +19,30 @@
             </intent-filter>
         </activity>
 
-        <!-- Widget Receiver -->
+        <!-- Standard Widget Receiver (2x3) -->
         <receiver
             android:name=".widget.StockWidgetReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:label="股票損益 (完整)">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/stock_widget_info" />
+        </receiver>
+
+        <!-- Compact Widget Receiver (1x2) -->
+        <receiver
+            android:name=".widget.CompactStockWidgetReceiver"
+            android:exported="true"
+            android:label="股票損益 (緊湊)">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/compact_stock_widget_info" />
         </receiver>
     </application>
 

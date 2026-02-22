@@ -18,9 +18,12 @@ class StockRepository(
     private val context: Context
 ) {
     private val userPreferences = UserPreferences(context)
+    private val database = com.example.stonkseveryday.data.database.StockDatabase.getDatabase(context)
+    private val dividendDao = database.dividendDao()
 
     val allTransactions: Flow<List<StockTransaction>> = dao.getAllTransactions()
     val todayTransactions: Flow<List<StockTransaction>> = dao.getTodayTransactions()
+    val allDividends: Flow<List<com.example.stonkseveryday.data.model.Dividend>> = dividendDao.getAllDividends()
 
     suspend fun insertTransaction(transaction: StockTransaction): Long {
         return dao.insertTransaction(transaction)
@@ -32,6 +35,120 @@ class StockRepository(
 
     suspend fun deleteTransaction(transaction: StockTransaction) {
         dao.deleteTransaction(transaction)
+    }
+
+    suspend fun insertDividend(dividend: com.example.stonkseveryday.data.model.Dividend): Long {
+        return dividendDao.insertDividend(dividend)
+    }
+
+    suspend fun deleteDividend(dividend: com.example.stonkseveryday.data.model.Dividend) {
+        dividendDao.deleteDividend(dividend)
+    }
+
+    suspend fun getDividendsByTransaction(transactionId: Long): List<com.example.stonkseveryday.data.model.Dividend> {
+        val flow = dividendDao.getDividendsByTransactionId(transactionId)
+        var result = listOf<com.example.stonkseveryday.data.model.Dividend>()
+        flow.collect { result = it }
+        return result
+    }
+
+    /**
+     * 根據股票代碼判斷是否為 ETF
+     * 台灣 ETF 代碼規律：
+     * - 00 開頭（如 0050, 0056）
+     * - 部分 5 開頭（如 5000）
+     */
+    private fun isEtfByCode(stockCode: String): Boolean {
+        return stockCode.startsWith("00") ||
+               (stockCode.startsWith("5") && stockCode.length == 4)
+    }
+
+    /**
+     * 取得股票名稱
+     * 策略：
+     * 1. 優先使用 TWSE API（會同時返回股價和名稱）
+     * 2. 如果失敗，嘗試使用 FinMind API
+     *
+     * @param stockCode 股票代碼 (例如: 2330)
+     * @return 股票資訊或 null（包含是否為 ETF 的判斷）
+     */
+    suspend fun getStockInfo(stockCode: String): com.example.stonkseveryday.data.api.StockInfoResponse? {
+        // 策略 1: 使用 TWSE API（同時取得名稱和價格）
+        val twseInfo = getStockInfoFromTwse(stockCode)
+        if (twseInfo != null) {
+            return twseInfo
+        }
+
+        // 策略 2: 使用 FinMind API
+        return getStockInfoFromFinMind(stockCode)
+    }
+
+    /**
+     * 從 TWSE API 取得股票資訊
+     */
+    private suspend fun getStockInfoFromTwse(stockCode: String): com.example.stonkseveryday.data.api.StockInfoResponse? = try {
+        val formattedCode = "tse_${stockCode}.tw"
+        val response = com.example.stonkseveryday.data.api.TwseRetrofitInstance.twseApiService
+            .getStockInfo(stockCode = formattedCode)
+
+        if (response.code == "0000" && !response.data.isNullOrEmpty()) {
+            val stockInfo = response.data.first()
+            com.example.stonkseveryday.data.api.StockInfoResponse(
+                stockCode = stockCode,
+                stockName = stockInfo.stockName,
+                isEtf = isEtfByCode(stockCode)
+            )
+        } else {
+            // 嘗試 OTC
+            val otcCode = "otc_${stockCode}.tw"
+            val otcResponse = com.example.stonkseveryday.data.api.TwseRetrofitInstance.twseApiService
+                .getStockInfo(stockCode = otcCode)
+
+            if (otcResponse.code == "0000" && !otcResponse.data.isNullOrEmpty()) {
+                val stockInfo = otcResponse.data.first()
+                com.example.stonkseveryday.data.api.StockInfoResponse(
+                    stockCode = stockCode,
+                    stockName = stockInfo.stockName,
+                    isEtf = isEtfByCode(stockCode)
+                )
+            } else {
+                null
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("StockRepository", "Error fetching stock info from TWSE for $stockCode", e)
+        null
+    }
+
+    /**
+     * 從 FinMind API 取得股票資訊
+     */
+    private suspend fun getStockInfoFromFinMind(stockCode: String): com.example.stonkseveryday.data.api.StockInfoResponse? = try {
+        val userToken = userPreferences.finmindToken.first()
+        val response = RetrofitInstance.stockApiService.getTaiwanStockInfo(
+            stockCode = stockCode,
+            token = userToken
+        )
+
+        if (response.status == 200 && response.data.isNotEmpty()) {
+            val stockData = response.data.find { it.stockId == stockCode }
+            stockData?.let {
+                // 從 FinMind API 的 type 欄位判斷是否為 ETF
+                val isEtfFromApi = it.type.contains("ETF", ignoreCase = true)
+                com.example.stonkseveryday.data.api.StockInfoResponse(
+                    stockCode = it.stockId,
+                    stockName = it.stockName,
+                    industry = it.industry,
+                    type = it.type,
+                    isEtf = isEtfFromApi || isEtfByCode(stockCode)
+                )
+            }
+        } else {
+            null
+        }
+    } catch (e: Exception) {
+        Log.e("StockRepository", "Error fetching stock info from FinMind for $stockCode", e)
+        null
     }
 
     /**
@@ -229,8 +346,17 @@ class StockRepository(
                         null
                     }
 
+                    // 獲取該股票的累計股利
+                    val totalDividends = try {
+                        dividendDao.getTotalDividendsByStockCode(code) ?: 0.0
+                    } catch (e: Exception) {
+                        Log.e("StockRepository", "Failed to fetch dividends for $code", e)
+                        0.0
+                    }
+
                     if (stockPrice != null) {
                         val currentPrice = stockPrice.currentPrice
+                        val currentValue = currentPrice * totalQuantity
                         val profitLoss = (currentPrice - averageCost) * totalQuantity
                         val profitLossPercentage = ((currentPrice - averageCost) / averageCost) * 100
 
@@ -240,8 +366,11 @@ class StockRepository(
                             quantity = totalQuantity,
                             averageCost = averageCost,
                             currentPrice = currentPrice,
+                            currentValue = currentValue,
                             profitLoss = profitLoss,
-                            profitLossPercentage = profitLossPercentage
+                            profitLossPercentage = profitLossPercentage,
+                            positionRatio = 0.0, // 會在後面計算
+                            totalDividends = totalDividends
                         )
                     } else {
                         // API 失敗，跳過此持股（不顯示錯誤資料）
@@ -251,31 +380,166 @@ class StockRepository(
                 } else null
             }
 
-            val totalProfitLoss = stockHoldings.sumOf { it.profitLoss }
+            // 計算總資產和持股比重
+            val totalCurrentValue = stockHoldings.sumOf { it.currentValue }
+            val totalCostBasis = stockHoldings.sumOf { it.averageCost * it.quantity }
+            val totalDividendsSum = stockHoldings.sumOf { it.totalDividends }
 
-            // Calculate today's profit/loss
-            val todayTx = txList.filter {
-                val today = System.currentTimeMillis() / (1000 * 60 * 60 * 24)
-                val txDay = it.transactionDate / (1000 * 60 * 60 * 24)
-                today == txDay
+            // 更新持股比重
+            val updatedHoldings = stockHoldings.map { holding ->
+                holding.copy(
+                    positionRatio = if (totalCurrentValue > 0) {
+                        (holding.currentValue / totalCurrentValue) * 100
+                    } else 0.0
+                )
             }
-            val dailyProfitLoss = todayTx.sumOf { tx ->
-                when (tx.transactionType) {
-                    TransactionType.SELL -> tx.totalAmount
-                    TransactionType.BUY -> -tx.totalAmount
+
+            // 計算總損益（含股利）
+            val totalProfitLoss = stockHoldings.sumOf { it.profitLoss } + totalDividendsSum
+            val totalProfitLossPercent = if (totalCostBasis > 0) {
+                (totalProfitLoss / totalCostBasis) * 100
+            } else 0.0
+
+            // 計算今日損益
+            // 這裡假設有保存昨日收盤價的機制，暫時簡化為 0
+            val todayProfitLoss = 0.0
+            val todayProfitLossPercent = 0.0
+
+            StockSummary(
+                totalAssets = totalCurrentValue,
+                netAssets = totalCurrentValue,
+                todayProfitLoss = todayProfitLoss,
+                todayProfitLossPercent = todayProfitLossPercent,
+                totalProfitLoss = totalProfitLoss,
+                totalProfitLossPercent = totalProfitLossPercent,
+                holdings = updatedHoldings
+            )
+        }
+    }
+
+    /**
+     * 自動推算並新增股利記錄
+     * 根據交易記錄的買入日期，查詢該股票的歷史股利資料，
+     * 並為符合條件的交易自動建立股利記錄
+     *
+     * @param stockCode 股票代碼
+     * @param token FinMind API Token (選填)
+     * @return 成功新增的股利記錄數量
+     */
+    suspend fun calculateAndInsertDividends(stockCode: String, token: String = ""): Int {
+        try {
+            // 1. 取得該股票的所有買入交易記錄
+            val transactions = allTransactions.first().filter {
+                it.stockCode == stockCode && it.transactionType == com.example.stonkseveryday.data.model.TransactionType.BUY
+            }
+
+            if (transactions.isEmpty()) {
+                return 0
+            }
+
+            // 2. 找出最早的買入日期
+            val earliestTransaction = transactions.minByOrNull { it.transactionDate }
+            val startDate = earliestTransaction?.let {
+                val calendar = java.util.Calendar.getInstance()
+                calendar.timeInMillis = it.transactionDate
+                String.format(
+                    "%04d-%02d-%02d",
+                    calendar.get(java.util.Calendar.YEAR),
+                    calendar.get(java.util.Calendar.MONTH) + 1,
+                    calendar.get(java.util.Calendar.DAY_OF_MONTH)
+                )
+            } ?: return 0
+
+            // 3. 從 FinMind API 取得股利資料
+            val dividendResponse = RetrofitInstance.stockApiService
+                .getTaiwanStockDividend(
+                    stockCode = stockCode,
+                    startDate = startDate,
+                    token = token
+                )
+
+            if (dividendResponse.status != 200 || dividendResponse.data.isEmpty()) {
+                return 0
+            }
+
+            var insertedCount = 0
+
+            // 4. 為每筆符合條件的交易建立股利記錄
+            for (transaction in transactions) {
+                val transactionCalendar = java.util.Calendar.getInstance()
+                transactionCalendar.timeInMillis = transaction.transactionDate
+
+                // 取得該交易已有的股利記錄，避免重複新增
+                val existingDividends = getDividendsByTransaction(transaction.id)
+                val existingDividendDates = existingDividends.map { it.exDividendDate }.toSet()
+
+                for (dividendData in dividendResponse.data) {
+                    // 解析除息日
+                    val exDividendDateStr = dividendData.date
+                    val exDividendCalendar = java.util.Calendar.getInstance()
+                    val dateParts = exDividendDateStr.split("-")
+                    if (dateParts.size != 3) continue
+
+                    exDividendCalendar.set(
+                        dateParts[0].toInt(),
+                        dateParts[1].toInt() - 1,
+                        dateParts[2].toInt()
+                    )
+
+                    // 判斷：買入日期必須在除息日之前
+                    if (transactionCalendar.timeInMillis < exDividendCalendar.timeInMillis) {
+                        // 檢查是否已經有這個日期的股利記錄
+                        if (exDividendCalendar.timeInMillis in existingDividendDates) {
+                            continue
+                        }
+
+                        // 計算股利金額
+                        val cashDividend = dividendData.cashDividend ?: 0.0
+                        val stockDividend = dividendData.stockDividend ?: 0.0
+                        val dividendYear = dividendData.dividendYear ?: ""
+
+                        // 只有當有現金股利或股票股利時才新增記錄
+                        if (cashDividend > 0 || stockDividend > 0) {
+                            // 現金股利
+                            if (cashDividend > 0) {
+                                val dividend = com.example.stonkseveryday.data.model.Dividend(
+                                    transactionId = transaction.id,
+                                    stockCode = stockCode,
+                                    dividendType = com.example.stonkseveryday.data.model.DividendType.CASH,
+                                    exDividendDate = exDividendCalendar.timeInMillis,
+                                    dividendPerShare = cashDividend,
+                                    quantity = transaction.quantity,
+                                    dividendAmount = cashDividend * transaction.quantity,
+                                    note = if (dividendYear.isNotEmpty()) "${dividendYear}年度現金股利" else "現金股利"
+                                )
+                                insertDividend(dividend)
+                                insertedCount++
+                            }
+
+                            // 股票股利
+                            if (stockDividend > 0) {
+                                val dividend = com.example.stonkseveryday.data.model.Dividend(
+                                    transactionId = transaction.id,
+                                    stockCode = stockCode,
+                                    dividendType = com.example.stonkseveryday.data.model.DividendType.STOCK,
+                                    exDividendDate = exDividendCalendar.timeInMillis,
+                                    dividendPerShare = stockDividend,
+                                    quantity = transaction.quantity,
+                                    dividendAmount = 0.0,
+                                    note = if (dividendYear.isNotEmpty()) "${dividendYear}年度股票股利 (配${stockDividend}股)" else "股票股利 (配${stockDividend}股)"
+                                )
+                                insertDividend(dividend)
+                                insertedCount++
+                            }
+                        }
+                    }
                 }
             }
 
-            // Total income from all sell transactions
-            val totalIncome = txList.filter { it.transactionType == TransactionType.SELL }
-                .sumOf { it.totalAmount }
-
-            StockSummary(
-                totalIncome = totalIncome,
-                dailyProfitLoss = dailyProfitLoss,
-                totalProfitLoss = totalProfitLoss,
-                holdings = stockHoldings
-            )
+            return insertedCount
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return 0
         }
     }
 }

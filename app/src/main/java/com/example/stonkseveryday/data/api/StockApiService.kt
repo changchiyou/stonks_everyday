@@ -17,6 +17,32 @@ interface StockApiService {
         @Query("start_date") startDate: String = "",
         @Query("token") token: String = ""
     ): FinMindResponse
+
+    /**
+     * 取得台股股票資訊（包含股票名稱）
+     * FinMind API: https://api.finmindtrade.com/api/v4/data
+     * dataset: TaiwanStockInfo
+     */
+    @GET("data")
+    suspend fun getTaiwanStockInfo(
+        @Query("dataset") dataset: String = "TaiwanStockInfo",
+        @Query("data_id") stockCode: String = "",
+        @Query("token") token: String = ""
+    ): FinMindStockInfoResponse
+
+    /**
+     * 取得台股股利資料
+     * FinMind API: https://api.finmindtrade.com/api/v4/data
+     * dataset: TaiwanStockDividend
+     */
+    @GET("data")
+    suspend fun getTaiwanStockDividend(
+        @Query("dataset") dataset: String = "TaiwanStockDividend",
+        @Query("data_id") stockCode: String,
+        @Query("start_date") startDate: String = "",
+        @Query("end_date") endDate: String = "",
+        @Query("token") token: String = ""
+    ): FinMindDividendResponse
 }
 
 data class FinMindResponse(
@@ -51,6 +77,27 @@ data class TaiwanStockData(
     val tradingTurnover: Long
 )
 
+// FinMind 股票資訊回應
+data class FinMindStockInfoResponse(
+    @SerializedName("msg")
+    val message: String,
+    @SerializedName("status")
+    val status: Int,
+    @SerializedName("data")
+    val data: List<TaiwanStockInfoData>
+)
+
+data class TaiwanStockInfoData(
+    @SerializedName("stock_id")
+    val stockId: String,
+    @SerializedName("stock_name")
+    val stockName: String,
+    @SerializedName("industry_category")
+    val industry: String,
+    @SerializedName("type")
+    val type: String
+)
+
 // 簡化的股價回應，用於內部使用
 data class StockPriceResponse(
     val stockCode: String,
@@ -59,4 +106,36 @@ data class StockPriceResponse(
     val change: Double,
     val changePercent: Double,
     val timestamp: Long
+)
+
+// 股票基本資訊回應
+data class StockInfoResponse(
+    val stockCode: String,
+    val stockName: String,
+    val industry: String = "",
+    val type: String = "",
+    val isEtf: Boolean = false
+)
+
+// FinMind 股利資料回應
+data class FinMindDividendResponse(
+    @SerializedName("msg")
+    val message: String,
+    @SerializedName("status")
+    val status: Int,
+    @SerializedName("data")
+    val data: List<TaiwanStockDividendData>
+)
+
+data class TaiwanStockDividendData(
+    @SerializedName("stock_id")
+    val stockId: String,
+    @SerializedName("date")
+    val date: String,  // 除息日/除權日
+    @SerializedName("dividend_year")
+    val dividendYear: String? = "",
+    @SerializedName("cash_dividend")
+    val cashDividend: Double? = 0.0,  // 現金股利
+    @SerializedName("stock_dividend")
+    val stockDividend: Double? = 0.0  // 股票股利
 )

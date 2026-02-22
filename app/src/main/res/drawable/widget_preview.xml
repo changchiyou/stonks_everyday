@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 背景 -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#F5F5F5" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+
+    <!-- 內容區域 -->
+    <item android:gravity="center">
+        <vector
+            android:width="180dp"
+            android:height="120dp"
+            android:viewportWidth="180"
+            android:viewportHeight="120">
+
+            <!-- 標題文字 -->
+            <path
+                android:fillColor="#000000"
+                android:pathData="M60,20 L120,20 L120,25 L60,25 Z" />
+
+            <!-- 金額顯示區域 -->
+            <path
+                android:fillColor="#2E7D32"
+                android:pathData="M50,40 L130,40 L130,60 L50,60 Z" />
+
+            <!-- 分隔線 -->
+            <path
+                android:fillColor="#BDBDBD"
+                android:pathData="M40,70 L140,70 L140,71 L40,71 Z" />
+
+            <!-- 底部資訊 -->
+            <path
+                android:fillColor="#757575"
+                android:pathData="M40,80 L80,80 L80,90 L40,90 Z" />
+            <path
+                android:fillColor="#757575"
+                android:pathData="M100,80 L140,80 L140,90 L100,90 Z" />
+
+            <!-- 圖示 -->
+            <path
+                android:fillColor="#4CAF50"
+                android:pathData="M90,45 L95,50 L90,55 L85,50 Z" />
+        </vector>
+    </item>
+
+    <!-- 應用程式圖示 (右上角) -->
+    <item
+        android:width="24dp"
+        android:height="24dp"
+        android:gravity="top|end"
+        android:right="8dp"
+        android:top="8dp">
+        <shape android:shape="oval">
+            <solid android:color="#1976D2" />
+        </shape>
+    </item>
+</layer-list>

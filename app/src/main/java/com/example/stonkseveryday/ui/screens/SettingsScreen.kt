@@ -9,17 +9,32 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     currentToken: String,
+    defaultFeeRate: Double,
+    defaultStockTaxRate: Double,
+    defaultEtfTaxRate: Double,
     onNavigateBack: () -> Unit,
-    onSaveToken: (String) -> Unit
+    onSaveToken: (String) -> Unit,
+    onSaveFeeRate: (Double) -> Unit,
+    onSaveStockTaxRate: (Double) -> Unit,
+    onSaveEtfTaxRate: (Double) -> Unit,
+    onBackup: () -> Unit = {},
+    onRestore: () -> Unit = {},
+    onClearAll: () -> Unit = {}
 ) {
     var tokenInput by remember { mutableStateOf(currentToken) }
+    var feeRateInput by remember { mutableStateOf(defaultFeeRate.toString()) }
+    var stockTaxRateInput by remember { mutableStateOf(defaultStockTaxRate.toString()) }
+    var etfTaxRateInput by remember { mutableStateOf(defaultEtfTaxRate.toString()) }
     var showSaveSuccess by remember { mutableStateOf(false) }
+    var showClearConfirmDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -75,7 +90,7 @@ fun SettingsScreen(
                     )
 
                     Text(
-                        text = "如果留空，系統會自動使用免費的台灣證券交易所官方 API。",
+                        text = "如果留空，系統會依序嘗試 FinMind 免費版 API 或台灣證券交易所官方 API（股利資料可能無法取得）",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.6f)
                     )
@@ -102,7 +117,7 @@ fun SettingsScreen(
                     )
                 ) {
                     Text(
-                        text = "✓ 設定已儲存",
+                        text = "設定已儲存",
                         modifier = Modifier.padding(16.dp),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onTertiaryContainer
@@ -138,10 +153,10 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            // Section: API 說明
+            // Section: 費率設定
             Text(
-                text = "API 使用說明",
-                style = MaterialTheme.typography.titleMedium,
+                text = "費率設定",
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
 
@@ -150,58 +165,151 @@ fun SettingsScreen(
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "📊 資料來源策略",
-                        style = MaterialTheme.typography.titleSmall,
+                        text = "預設手續費率（%）",
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
 
-                    Text(
-                        text = "1. 如果有設定 FinMind Token → 使用 FinMind API",
-                        style = MaterialTheme.typography.bodyMedium
+                    OutlinedTextField(
+                        value = feeRateInput,
+                        onValueChange = { feeRateInput = it },
+                        label = { Text("手續費率") },
+                        placeholder = { Text("0.1425") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        supportingText = {
+                            Text("預設 0.1425%，券商優惠請自行調整")
+                        }
                     )
 
                     Text(
-                        text = "2. 如果沒有 Token 或 FinMind 失敗 → 自動使用 TWSE 官方 API",
-                        style = MaterialTheme.typography.bodyMedium
+                        text = "預設證交稅率（%）",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
                     )
 
-                    Text(
-                        text = "3. 如果兩個 API 都失敗 → 該股票不顯示未實現損益",
-                        style = MaterialTheme.typography.bodyMedium
+                    OutlinedTextField(
+                        value = stockTaxRateInput,
+                        onValueChange = { stockTaxRateInput = it },
+                        label = { Text("一般股票證交稅率") },
+                        placeholder = { Text("0.3") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        supportingText = {
+                            Text("一般股票賣出適用，預設 0.3%")
+                        }
                     )
+
+                    OutlinedTextField(
+                        value = etfTaxRateInput,
+                        onValueChange = { etfTaxRateInput = it },
+                        label = { Text("ETF 證交稅率") },
+                        placeholder = { Text("0.1") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        supportingText = {
+                            Text("ETF 賣出適用，預設 0.1%")
+                        }
+                    )
+
+                    Button(
+                        onClick = {
+                            feeRateInput.toDoubleOrNull()?.let { onSaveFeeRate(it) }
+                            stockTaxRateInput.toDoubleOrNull()?.let { onSaveStockTaxRate(it) }
+                            etfTaxRateInput.toDoubleOrNull()?.let { onSaveEtfTaxRate(it) }
+                            showSaveSuccess = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("儲存費率設定")
+                    }
                 }
             }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            // Section: 資料管理
+            Text(
+                text = "資料管理",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
 
             Card(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "💡 建議",
-                        style = MaterialTheme.typography.titleSmall,
+                        text = "備份與恢復",
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
 
                     Text(
-                        text = "• 一般使用者：不需設定 Token，使用 TWSE 官方 API 即可",
-                        style = MaterialTheme.typography.bodyMedium
+                        text = "備份您的交易記錄和股利資料，以便在需要時恢復。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onBackup,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("備份資料")
+                        }
+
+                        OutlinedButton(
+                            onClick = onRestore,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("恢復資料")
+                        }
+                    }
+                }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "清除所有資料",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onErrorContainer
                     )
 
                     Text(
-                        text = "• 頻繁使用者：建議註冊 FinMind 以獲得更快的查詢速度",
-                        style = MaterialTheme.typography.bodyMedium
+                        text = "警告：此操作將永久刪除所有交易記錄和股利資料，無法復原。請先備份資料。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f)
                     )
 
-                    Text(
-                        text = "• 資料安全：Token 僅儲存在您的裝置上，不會上傳到任何伺服器",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Button(
+                        onClick = { showClearConfirmDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("清除所有資料")
+                    }
                 }
             }
 
@@ -209,10 +317,58 @@ fun SettingsScreen(
         }
     }
 
+    // 清除確認對話框
+    if (showClearConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirmDialog = false },
+            title = { Text("確認清除所有資料") },
+            text = {
+                Text("此操作將永久刪除所有交易記錄和股利資料，無法復原。\n\n您確定要繼續嗎？")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearConfirmDialog = false
+                        onClearAll()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("確定清除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirmDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
     LaunchedEffect(showSaveSuccess) {
         if (showSaveSuccess) {
-            kotlinx.coroutines.delay(2000)
+            delay(2000)
             showSaveSuccess = false
         }
     }
 }
+
+//@Preview
+//@Composable
+//private fun SettingScreenPreview() {
+//    SettingsScreen(
+//        currentToken = "",
+//        defaultFeeRate = 0.0,
+//        defaultStockTaxRate = 0.0,
+//        defaultEtfTaxRate = 0.0,
+//        onNavigateBack = {},
+//        onSaveToken = {},
+//        onSaveFeeRate = {},
+//        onSaveStockTaxRate = {},
+//        onSaveEtfTaxRate = {},
+//        onBackup = {},
+//        onRestore = {},
+//        onClearAll = {}
+//    )
+//}

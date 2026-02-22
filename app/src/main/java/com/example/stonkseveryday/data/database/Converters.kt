@@ -1,6 +1,7 @@
 package com.example.stonkseveryday.data.database
 
 import androidx.room.TypeConverter
+import com.example.stonkseveryday.data.model.DividendType
 import com.example.stonkseveryday.data.model.TransactionType
 
 class Converters {
@@ -12,5 +13,15 @@ class Converters {
     @TypeConverter
     fun toTransactionType(value: String): TransactionType {
         return TransactionType.valueOf(value)
+    }
+
+    @TypeConverter
+    fun fromDividendType(type: DividendType): String {
+        return type.name
+    }
+
+    @TypeConverter
+    fun toDividendType(value: String): DividendType {
+        return DividendType.valueOf(value)
     }
 }
