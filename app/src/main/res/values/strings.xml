@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Stonks Everyday</string>
+    <string name="widget_description">顯示股票當日損益和總覽</string>
+</resources>
