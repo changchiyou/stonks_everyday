@@ -33,126 +33,109 @@ import java.util.Locale
 class StockWidget : GlanceAppWidget() {
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val dao = StockDatabase.getDatabase(context).stockTransactionDao()
-        val repository = StockRepository(dao, context)
+        // 先檢查 widget 是否仍然存在（提前過濾無效的 widget ID）
+        try {
+            val manager = androidx.glance.appwidget.GlanceAppWidgetManager(context)
+            val appWidgetId = manager.getAppWidgetId(id)
+            val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(context)
+            val widgetInfo = appWidgetManager.getAppWidgetInfo(appWidgetId)
 
-        // Get today's transactions
-        val todayTransactions = repository.todayTransactions.first()
-
-        // Calculate daily profit/loss
-        val dailyProfitLoss = todayTransactions.sumOf { tx ->
-            when (tx.transactionType) {
-                TransactionType.SELL -> tx.totalAmount
-                TransactionType.BUY -> -tx.totalAmount
+            if (widgetInfo == null) {
+                android.util.Log.w("StockWidget", "Widget ID $appWidgetId no longer exists, throwing exception to trigger cleanup")
+                // 拋出 IllegalArgumentException 讓 Glance 框架知道這個 widget 無效
+                throw IllegalArgumentException("Widget ID $appWidgetId is no longer valid")
             }
+        } catch (e: IllegalArgumentException) {
+            // 重新拋出 IllegalArgumentException，讓系統知道這個 widget 無效
+            throw e
+        } catch (e: Exception) {
+            android.util.Log.e("StockWidget", "Failed to check widget existence: ${e.message}", e)
+            throw e
         }
 
-        // Get all transactions for total summary
-        val allTransactions = repository.allTransactions.first()
-        val summary = calculateQuickSummary(allTransactions)
+        // Widget 存在，嘗試更新
+        try {
+            // 使用快取避免多個小工具同時計算
+            val data = WidgetDataCache.getData(context, forceRefresh = false)
 
-        // 儲存最後刷新時間
-        val prefs = context.getSharedPreferences("widget_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putLong("last_refresh_time", System.currentTimeMillis()).apply()
-
-        provideContent {
-            WidgetContent(
-                dailyProfitLoss = dailyProfitLoss,
-                totalProfitLoss = summary.totalProfitLoss,
-                totalAssets = summary.totalAssets,
-                lastRefreshTime = System.currentTimeMillis(),
-                isCompact = false
-            )
+            provideContent {
+                WidgetContent(
+                    dailyProfitLoss = data.dailyProfitLoss,
+                    totalProfitLoss = data.totalProfitLoss,
+                    totalAssets = data.totalAssets,
+                    lastRefreshTime = data.lastRefreshTime,
+                    isCompact = false
+                )
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Widget 在渲染過程中被取消，這是正常現象（app 更新時）
+            android.util.Log.d("StockWidget", "Widget cancelled: ${e.message}")
+            throw e  // CancellationException 必須重新拋出
+        } catch (e: Exception) {
+            // 捕獲所有其他錯誤
+            android.util.Log.e("StockWidget", "Error updating widget: ${e.javaClass.simpleName} - ${e.message}", e)
+            // Widget 存在但更新失敗，嘗試顯示預設值
+            try {
+                provideContent {
+                    WidgetContent(
+                        dailyProfitLoss = 0.0,
+                        totalProfitLoss = 0.0,
+                        totalAssets = 0.0,
+                        lastRefreshTime = 0L,  // 0L 會顯示為 "--/-- --:--"
+                        isCompact = false
+                    )
+                }
+            } catch (fallbackError: Exception) {
+                // Fallback 也失敗了，記錄錯誤
+                android.util.Log.e("StockWidget", "Failed to show fallback content: ${fallbackError.message}", fallbackError)
+            }
         }
     }
 
-    private fun calculateQuickSummary(transactions: List<com.example.stonkseveryday.data.model.StockTransaction>): StockSummary {
-        val holdings = mutableMapOf<String, Pair<Int, Double>>()
-
-        transactions.forEach { tx ->
-            val (quantity, cost) = holdings.getOrDefault(tx.stockCode, Pair(0, 0.0))
-            when (tx.transactionType) {
-                TransactionType.BUY -> {
-                    holdings[tx.stockCode] = Pair(
-                        quantity + tx.quantity,
-                        cost + tx.totalAmount
-                    )
-                }
-                TransactionType.SELL -> {
-                    holdings[tx.stockCode] = Pair(
-                        quantity - tx.quantity,
-                        cost - tx.totalAmount
-                    )
-                }
-            }
-        }
-
-        val totalCost = holdings.values.sumOf { (_, cost) -> cost }
-        val totalProfitLoss = holdings.values.sumOf { (quantity, cost) ->
-            if (quantity > 0) {
-                val averageCost = cost / quantity
-                val currentPrice = averageCost * 1.05
-                (currentPrice - averageCost) * quantity
-            } else 0.0
-        }
-        val totalAssets = totalCost + totalProfitLoss
-
-        return StockSummary(
-            totalAssets = totalAssets,
-            netAssets = totalAssets,
-            todayProfitLoss = 0.0,
-            todayProfitLossPercent = 0.0,
-            totalProfitLoss = totalProfitLoss,
-            totalProfitLossPercent = if (totalCost > 0) (totalProfitLoss / totalCost) * 100 else 0.0,
-            holdings = emptyList()
-        )
-    }
 }
 
 /**
- * 格式化金額
- * - 緊湊模式：>= 1000 使用 K/M 格式
- * - 一般模式：>= 1,000,000 使用 M 格式，>= 10,000 使用 K 格式
- * - 移除不必要的 .00 後綴
+ * 格式化金額（與 app 內 MainScreen.formatCurrency 完全一致）
+ * - >= 100,000,000: 顯示為 M (百萬)，.2f
+ * - >= 10,000: 顯示為 K (千)，.1f
+ * - < 10,000: 直接顯示整數
  */
-private fun formatAmount(amount: Double, useShortFormat: Boolean = false): String {
-    val absAmount = Math.abs(amount)
+private fun formatAmount(amount: Double): String {
+    val absAmount = kotlin.math.abs(amount)
     val sign = if (amount < 0) "-" else ""
 
-    return if (useShortFormat) {
-        // 緊湊模式：適用於小 widget
-        when {
-            absAmount >= 1_000_000 -> String.format("%s%.1fM", sign, absAmount / 1_000_000)
-            absAmount >= 1_000 -> String.format("%s%.1fK", sign, absAmount / 1_000)
-            else -> String.format("%s%.0f", sign, absAmount)
-        }
-    } else {
-        // 一般模式：適用於主畫面和大 widget
-        when {
-            absAmount >= 10_000_000 -> String.format("%s%.2fM", sign, absAmount / 1_000_000)
-            absAmount >= 1_000_000 -> String.format("%s%.1fM", sign, absAmount / 1_000_000)
-            absAmount >= 100_000 -> String.format("%s%.1fK", sign, absAmount / 1_000)
-            absAmount >= 1_000 -> String.format("%s%.0fK", sign, absAmount / 1_000)
-            else -> String.format("%s%.0f", sign, absAmount)
-        }
+    return when {
+        absAmount >= 100_000_000 -> String.format("%s$%.2fM", sign, absAmount / 1_000_000)
+        absAmount >= 10_000 -> String.format("%s$%.1fK", sign, absAmount / 1_000)
+        else -> String.format("%s$%.0f", sign, absAmount)
     }
 }
 
 /**
- * 格式化刷新時間為相對時間（精確到分鐘）
+ * 格式化金額（精簡版，完全不含符號）
+ * 用於精簡小工具，避免換行
  */
-private fun formatRefreshTime(timestamp: Long): String {
-    val now = System.currentTimeMillis()
-    val diffMinutes = ((now - timestamp) / 60000).toInt()
+private fun formatAmountCompact(amount: Double): String {
+    val absAmount = kotlin.math.abs(amount)
 
     return when {
-        diffMinutes == 0 -> "剛剛"
-        diffMinutes < 60 -> "${diffMinutes}分鐘前"
+        absAmount >= 100_000_000 -> String.format("%.1fM", absAmount / 1_000_000)
+        absAmount >= 10_000 -> String.format("%.1fK", absAmount / 1_000)
+        else -> String.format("%.0f", absAmount)
+    }
+}
+
+/**
+ * 格式化刷新時間為絕對時間（日期+時間，精確到分鐘）
+ * 格式：MM/dd HH:mm（例如：02/23 14:35）
+ * 如果 timestamp 為 0，返回 "--/-- --:--" 表示無資料
+ */
+private fun formatRefreshTime(timestamp: Long): String {
+    return when (timestamp) {
+        0L -> "--/-- --:--"
         else -> {
-            val hours = diffMinutes / 60
-            val minutes = diffMinutes % 60
-            if (minutes == 0) "${hours}小時前"
-            else "${hours}小時${minutes}分鐘前"
+            val dateFormat = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault())
+            dateFormat.format(Date(timestamp))
         }
     }
 }
@@ -165,14 +148,21 @@ fun WidgetContent(
         lastRefreshTime: Long = System.currentTimeMillis(),
         isCompact: Boolean = false
     ) {
-        val currencyFormat = NumberFormat.getCurrencyInstance(java.util.Locale.TAIWAN)
         val refreshTimeText = formatRefreshTime(lastRefreshTime)
 
         Box(
             modifier = GlanceModifier
                 .fillMaxSize()
                 .background(ColorProvider(day = Color(0xFFF5F5F5), night = Color(0xFF1E1E1E)))
-                .padding(if (isCompact) 8.dp else 16.dp),
+                .padding(if (isCompact) 8.dp else 16.dp)
+                // 精簡版：整個小工具都可點擊刷新
+                .clickable(
+                    if (isCompact) {
+                        actionRunCallback<RefreshWidgetCallback>()
+                    } else {
+                        actionStartActivity<MainActivity>()  // 一般版背景點擊打開 app
+                    }
+                ),
             contentAlignment = Alignment.Center
         ) {
             Column(
@@ -180,100 +170,111 @@ fun WidgetContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Title with refresh action and refresh time
-                Row(
-                    modifier = GlanceModifier
-                        .fillMaxWidth()
-                        .clickable(actionRunCallback<RefreshWidgetCallback>()),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (isCompact) {
-                        // 精簡版：只顯示刷新時間
-                        Text(
-                            text = refreshTimeText,
-                            style = TextStyle(
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Normal,
-                                color = ColorProvider(day = Color.Gray, night = Color.LightGray)
-                            )
-                        )
-                    } else {
-                        // 一般版：標題 + 刷新時間
-                        Text(
-                            text = "Stonks Everyday",
-                            style = TextStyle(
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = ColorProvider(day = Color.Black, night = Color.White)
-                            )
-                        )
-                        Spacer(modifier = GlanceModifier.width(8.dp))
-                        Text(
-                            text = refreshTimeText,
-                            style = TextStyle(
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Normal,
-                                color = ColorProvider(day = Color.Gray, night = Color.LightGray)
-                            )
-                        )
-                    }
-                }
-
-                Spacer(modifier = GlanceModifier.height(if (isCompact) 4.dp else 8.dp))
-
-                // Daily Profit/Loss (主要顯示)
+                // 可點擊刷新區域：標題 + 今日損益（一般版上半部可刷新）
                 Column(
-                    modifier = GlanceModifier.clickable(actionStartActivity<MainActivity>()),
+                    modifier = if (!isCompact) {
+                        GlanceModifier
+                            .fillMaxWidth()
+                            .clickable(actionRunCallback<RefreshWidgetCallback>())
+                    } else {
+                        GlanceModifier.fillMaxWidth()
+                    },
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    if (!isCompact) {
-                        Text(
-                            text = "當日損益",
-                            style = TextStyle(
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Normal,
-                                color = ColorProvider(day = Color.Gray, night = Color.LightGray)
+                    // Title with refresh time
+                    Row(
+                        modifier = GlanceModifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isCompact) {
+                            // 精簡版：只顯示時間
+                            Text(
+                                text = refreshTimeText,
+                                style = TextStyle(
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    color = ColorProvider(day = Color.Gray, night = Color.LightGray)
+                                )
                             )
-                        )
-                        Spacer(modifier = GlanceModifier.height(4.dp))
+                        } else {
+                            // 一般版：標題 + 時間
+                            Text(
+                                text = "Stonks Everyday",
+                                style = TextStyle(
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = ColorProvider(day = Color.Black, night = Color.White)
+                                )
+                            )
+                            Spacer(modifier = GlanceModifier.width(8.dp))
+                            Text(
+                                text = refreshTimeText,
+                                style = TextStyle(
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    color = ColorProvider(day = Color.Gray, night = Color.LightGray)
+                                )
+                            )
+                        }
                     }
 
-                    Text(
-                        text = if (isCompact) formatAmount(dailyProfitLoss, true) else currencyFormat.format(dailyProfitLoss),
-                        style = TextStyle(
-                            fontSize = if (isCompact) 20.sp else 24.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (dailyProfitLoss >= 0) {
-                                // 賺錢：紅色（台股習慣）
-                                ColorProvider(day = Color(0xFFC62828), night = Color(0xFFEF5350))
-                            } else {
-                                // 虧錢：綠色（台股習慣）
-                                ColorProvider(day = Color(0xFF2E7D32), night = Color(0xFF4CAF50))
-                            }
+                    Spacer(modifier = GlanceModifier.height(if (isCompact) 4.dp else 8.dp))
+
+                    // Daily Profit/Loss (主要顯示)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        if (!isCompact) {
+                            Text(
+                                text = "今日損益",
+                                style = TextStyle(
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    color = ColorProvider(day = Color.Gray, night = Color.LightGray)
+                                )
+                            )
+                            Spacer(modifier = GlanceModifier.height(4.dp))
+                        }
+
+                        Text(
+                            text = if (isCompact) formatAmountCompact(dailyProfitLoss) else formatAmount(dailyProfitLoss),
+                            style = TextStyle(
+                                fontSize = if (isCompact) 18.sp else 24.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (dailyProfitLoss >= 0) {
+                                    // 賺錢：紅色（台股習慣）
+                                    ColorProvider(day = Color(0xFFC62828), night = Color(0xFFEF5350))
+                                } else {
+                                    // 虧錢：綠色（台股習慣）
+                                    ColorProvider(day = Color(0xFF2E7D32), night = Color(0xFF4CAF50))
+                                }
+                            )
                         )
-                    )
+                    }
                 }
 
                 if (!isCompact) {
                     Spacer(modifier = GlanceModifier.height(12.dp))
 
-                    // Divider
+                    // 分隔線來 highlight 可刷新區域
                     Box(
                         modifier = GlanceModifier
                             .fillMaxWidth()
-                            .height(1.dp)
-                            .background(ColorProvider(day = Color.LightGray, night = Color.DarkGray)),
+                            .height(2.dp)
+                            .background(ColorProvider(day = Color(0xFF1976D2), night = Color(0xFF42A5F5))),
                         content = {}
                     )
 
                     Spacer(modifier = GlanceModifier.height(12.dp))
                 }
 
-                // Additional Info (only in large mode)
+                // Additional Info (only in large mode) - 點擊打開 app
                 if (!isCompact) {
                     Row(
-                    modifier = GlanceModifier.fillMaxWidth(),
+                    modifier = GlanceModifier
+                        .fillMaxWidth()
+                        .clickable(actionStartActivity<MainActivity>()),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -282,7 +283,7 @@ fun WidgetContent(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "總資產",
+                            text = "預估總市值",
                             style = TextStyle(
                                 fontSize = 10.sp,
                                 color = ColorProvider(day = Color.Gray, night = Color.LightGray)
@@ -290,7 +291,7 @@ fun WidgetContent(
                         )
                         Spacer(modifier = GlanceModifier.height(2.dp))
                         Text(
-                            text = currencyFormat.format(totalAssets),
+                            text = formatAmount(totalAssets),
                             style = TextStyle(
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
@@ -304,7 +305,7 @@ fun WidgetContent(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "總損益",
+                            text = "總未實現損益",
                             style = TextStyle(
                                 fontSize = 10.sp,
                                 color = ColorProvider(day = Color.Gray, night = Color.LightGray)
@@ -312,7 +313,7 @@ fun WidgetContent(
                         )
                         Spacer(modifier = GlanceModifier.height(2.dp))
                         Text(
-                            text = currencyFormat.format(totalProfitLoss),
+                            text = formatAmount(totalProfitLoss),
                             style = TextStyle(
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
@@ -334,32 +335,111 @@ fun WidgetContent(
 
 /**
  * Widget 更新回調
- * 使用 GlanceAppWidgetManager 來更新正確的 widget
+ * 真正刷新數據：呼叫 API 更新 database，然後更新 widget 顯示
  */
 class RefreshWidgetCallback : androidx.glance.appwidget.action.ActionCallback {
+    companion object {
+        private var isRefreshing = false
+        private var lastRefreshTime = 0L
+        private const val MIN_REFRESH_INTERVAL = 3000L // 最短 3 秒才能再次刷新
+    }
+
     override suspend fun onAction(
         context: Context,
         glanceId: GlanceId,
         parameters: androidx.glance.action.ActionParameters
     ) {
-        // 取得 widget 的實際類型並更新
-        val manager = androidx.glance.appwidget.GlanceAppWidgetManager(context)
-        val appWidgetId = manager.getAppWidgetId(glanceId)
+        val now = System.currentTimeMillis()
 
-        // 檢查這個 glanceId 屬於哪個 widget
-        val compactIds = manager.getGlanceIds(CompactStockWidget::class.java)
-        val standardIds = manager.getGlanceIds(StockWidget::class.java)
+        // 防抖動：避免短時間內重複刷新
+        if (isRefreshing || (now - lastRefreshTime < MIN_REFRESH_INTERVAL)) {
+            android.util.Log.d("RefreshWidgetCallback", "防抖動：距上次刷新僅 ${now - lastRefreshTime}ms，跳過")
+            return
+        }
 
-        when (glanceId) {
-            in compactIds -> CompactStockWidget().update(context, glanceId)
-            in standardIds -> StockWidget().update(context, glanceId)
-            else -> StockWidget().update(context, glanceId) // 預設
+        isRefreshing = true
+        lastRefreshTime = now
+
+        try {
+            android.util.Log.i("RefreshWidgetCallback", "開始刷新股價...")
+
+            // 1. 取得所有持股的股票代碼
+            val database = StockDatabase.getDatabase(context)
+            val dao = database.stockTransactionDao()
+            val repository = com.example.stonkseveryday.data.repository.StockRepository(dao, context)
+
+            val allTransactions = dao.getAllTransactions().first()
+            val holdings = mutableMapOf<String, MutableList<com.example.stonkseveryday.data.model.StockTransaction>>()
+            allTransactions.forEach { tx ->
+                holdings.getOrPut(tx.stockCode) { mutableListOf() }.add(tx)
+            }
+
+            val stockCodes = holdings.keys.toList()
+            android.util.Log.d("RefreshWidgetCallback", "需要更新 ${stockCodes.size} 支股票: $stockCodes")
+
+            // 2. 呼叫 API 更新每支股票的價格（repository.getStockPrice 會更新快取）
+            var successCount = 0
+            var failCount = 0
+            for (stockCode in stockCodes) {
+                try {
+                    val price = repository.getStockPrice(stockCode)
+                    if (price != null && !price.isStale) {
+                        successCount++
+                        android.util.Log.d("RefreshWidgetCallback", "$stockCode 股價更新成功: ${price.currentPrice}")
+                    } else {
+                        failCount++
+                        android.util.Log.w("RefreshWidgetCallback", "$stockCode 股價更新失敗或使用舊資料")
+                    }
+                } catch (e: Exception) {
+                    failCount++
+                    android.util.Log.e("RefreshWidgetCallback", "$stockCode 股價更新異常: ${e.message}", e)
+                }
+            }
+
+            android.util.Log.i("RefreshWidgetCallback", "股價更新完成：成功 $successCount 支，失敗 $failCount 支")
+
+            // 3. 更新刷新時間
+            val prefs = context.getSharedPreferences("widget_prefs", Context.MODE_PRIVATE)
+            prefs.edit().putLong("last_refresh_time", System.currentTimeMillis()).apply()
+
+            // 4. 清除快取，讓 widget 重新計算
+            WidgetDataCache.getData(context, forceRefresh = true)
+
+            // 5. 使用 WorkManager 觸發 widget 更新（避免 coroutine scope 被取消）
+            android.util.Log.d("RefreshWidgetCallback", "觸發 WorkManager 更新 widget")
+            val workRequest = androidx.work.OneTimeWorkRequestBuilder<StockWidgetWorker>()
+                .build()
+            androidx.work.WorkManager.getInstance(context).enqueue(workRequest)
+
+        } catch (e: Exception) {
+            android.util.Log.e("RefreshWidgetCallback", "刷新失敗: ${e.message}", e)
+        } finally {
+            isRefreshing = false
         }
     }
 }
 
 class StockWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = StockWidget()
+
+    override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
+        super.onReceive(context, intent)
+
+        // 當 app 更新後，強制重新載入所有 widget
+        if (android.content.Intent.ACTION_MY_PACKAGE_REPLACED == intent.action) {
+            android.util.Log.i("StockWidgetReceiver", "App 更新完成，強制更新所有 widget")
+
+            // 獲取所有屬於此 Provider 的 widget IDs
+            val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(context)
+            val componentName = android.content.ComponentName(context, StockWidgetReceiver::class.java)
+            val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName)
+
+            android.util.Log.i("StockWidgetReceiver", "找到 ${appWidgetIds.size} 個 widget 需要更新")
+
+            // 手動觸發更新（呼叫 onUpdate）
+            onUpdate(context, appWidgetManager, appWidgetIds)
+        }
+    }
 }
 
 /**

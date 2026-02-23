@@ -41,22 +41,12 @@ private fun formatCurrency(amount: Double): String {
 }
 
 /**
- * 格式化刷新時間為相對時間（精確到分鐘）
+ * 格式化刷新時間為絕對時間（日期+時間，精確到分鐘）
+ * 格式：MM/dd HH:mm（例如：02/23 14:35）
  */
 private fun formatRefreshTime(timestamp: Long): String {
-    val now = System.currentTimeMillis()
-    val diffMinutes = ((now - timestamp) / 60000).toInt()
-
-    return when {
-        diffMinutes == 0 -> "剛剛更新"
-        diffMinutes < 60 -> "${diffMinutes}分鐘前"
-        else -> {
-            val hours = diffMinutes / 60
-            val minutes = diffMinutes % 60
-            if (minutes == 0) "${hours}小時前"
-            else "${hours}小時${minutes}分鐘前"
-        }
-    }
+    val dateFormat = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault())
+    return dateFormat.format(Date(timestamp))
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -83,16 +73,8 @@ fun MainScreen(
         }
     }
 
-    // 用於強制重新計算刷新時間文字（每分鐘更新一次）
-    var refreshTimeTrigger by remember { mutableStateOf(0) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(60_000) // 每分鐘更新一次文字
-            refreshTimeTrigger++
-        }
-    }
-
-    val refreshTimeText = remember(lastRefreshTime, refreshTimeTrigger) {
+    // 刷新時間文字（絕對時間，不需要定期更新）
+    val refreshTimeText = remember(lastRefreshTime) {
         formatRefreshTime(lastRefreshTime)
     }
 
@@ -101,7 +83,7 @@ fun MainScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("股票交易記錄")
+                        Text("Stonks Everyday")
                         Text(
                             text = refreshTimeText,
                             style = MaterialTheme.typography.labelSmall,
@@ -302,13 +284,47 @@ fun SummaryCard(summary: StockSummary) {
                         else
                             MaterialTheme.colorScheme.tertiary  // 虧錢：綠色（台股習慣）
                     )
+                    // 報酬率顯示：零成本投資組合時顯示特殊提示
+                    if (summary.isPortfolioZeroCost) {
+                        Text(
+                            text = "✨ 零成本投資組合",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    } else {
+                        Text(
+                            text = "${if (summary.totalProfitLossPercent >= 0) "+" else ""}${"%.2f".format(summary.totalProfitLossPercent)}%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (summary.totalProfitLoss >= 0)
+                                MaterialTheme.colorScheme.error  // 賺錢：紅色（台股習慣）
+                            else
+                                MaterialTheme.colorScheme.tertiary  // 虧錢：綠色（台股習慣）
+                        )
+                    }
+                }
+            }
+
+            // 第三行：調整後總成本（含股利開關開啟時才顯示）
+            if (summary.adjustedTotalCost != 0.0) {
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
                     Text(
-                        text = "${if (summary.totalProfitLossPercent >= 0) "+" else ""}${"%.2f".format(summary.totalProfitLossPercent)}%",
+                        text = "調整後總成本",
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (summary.totalProfitLoss >= 0)
-                            MaterialTheme.colorScheme.error  // 賺錢：紅色（台股習慣）
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        text = formatCurrency(summary.adjustedTotalCost),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = if (summary.adjustedTotalCost < 0)
+                            MaterialTheme.colorScheme.primary
                         else
-                            MaterialTheme.colorScheme.tertiary  // 虧錢：綠色（台股習慣）
+                            MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 }
             }
@@ -441,15 +457,25 @@ fun HoldingItem(
                     )
                 }
 
-                Text(
-                    text = "${if (holding.profitLossPercentage >= 0) "+" else ""}${"%.2f".format(holding.profitLossPercentage)}%",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = if (holding.profitLoss >= 0)
-                        MaterialTheme.colorScheme.tertiary
-                    else
-                        MaterialTheme.colorScheme.error
-                )
+                // 報酬率顯示：零成本時顯示特殊提示
+                if (holding.isZeroCost) {
+                    Text(
+                        text = "🎉 零成本",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    Text(
+                        text = "${if (holding.profitLossPercentage >= 0) "+" else ""}${"%.2f".format(holding.profitLossPercentage)}%",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (holding.profitLoss >= 0)
+                            MaterialTheme.colorScheme.tertiary
+                        else
+                            MaterialTheme.colorScheme.error
+                    )
+                }
             }
 
             HorizontalDivider()
@@ -506,7 +532,7 @@ fun HoldingItem(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "現值",
+                        text = "預估市值",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
@@ -519,7 +545,7 @@ fun HoldingItem(
 
                 Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = "損益",
+                        text = "未實現損益",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
@@ -547,7 +573,28 @@ fun HoldingItem(
                     )
                 }
             }
-            // 主畫面不顯示累積股利，只在持股明細頁面顯示
+
+            // 第四行：累積股利（永遠顯示，但開關控制是否納入損益計算）
+            if (holding.totalDividends > 0) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Start
+                ) {
+                    Column {
+                        Text(
+                            text = "累積股利",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                        Text(
+                            text = formatCurrency(holding.totalDividends),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.error  // 股利收入：紅色（台股習慣）
+                        )
+                    }
+                }
+            }
         }
     }
 }

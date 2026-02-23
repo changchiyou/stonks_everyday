@@ -7,7 +7,9 @@ data class StockSummary(
     val todayProfitLossPercent: Double, // 今日損益百分比
     val totalProfitLoss: Double,      // 總未實現損益
     val totalProfitLossPercent: Double, // 總未實現損益百分比
-    val holdings: List<StockHolding>
+    val holdings: List<StockHolding>,
+    val adjustedTotalCost: Double = 0.0, // 調整後總成本（扣除股利後，可能為負）
+    val isPortfolioZeroCost: Boolean = false // 投資組合是否達成零成本
 )
 
 data class StockHolding(
@@ -21,5 +23,7 @@ data class StockHolding(
     val profitLossPercentage: Double, // 報酬率 %
     val positionRatio: Double,        // 持股比重 %
     val totalDividends: Double = 0.0, // 累計股利
-    val isPriceStale: Boolean = false // 股價資料是否過期（API 失敗，使用快取）
+    val isPriceStale: Boolean = false, // 股價資料是否過期（API 失敗，使用快取）
+    val adjustedCost: Double = 0.0,   // 調整後成本（扣除股利後，可能為負）
+    val isZeroCost: Boolean = false   // 是否達成零成本
 )

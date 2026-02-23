@@ -21,6 +21,7 @@ import com.example.stonkseveryday.ui.screens.*
 import com.example.stonkseveryday.ui.theme.StonksEverydayTheme
 import com.example.stonkseveryday.ui.viewmodel.StockViewModel
 import com.example.stonkseveryday.widget.WidgetUpdateHelper
+import androidx.glance.appwidget.updateAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -30,6 +31,25 @@ class MainActivity : ComponentActivity() {
 
         // Schedule widget updates
         WidgetUpdateHelper.scheduleWidgetUpdates(this)
+
+        // 強制更新所有 widget（解決 IDE Run 不觸發 MY_PACKAGE_REPLACED 的問題）
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                android.util.Log.i("MainActivity", "啟動時更新所有 widget - 開始")
+                val startTime = System.currentTimeMillis()
+
+                com.example.stonkseveryday.widget.StockWidget().updateAll(applicationContext)
+                android.util.Log.i("MainActivity", "標準 widget 更新完成")
+
+                com.example.stonkseveryday.widget.CompactStockWidget().updateAll(applicationContext)
+                android.util.Log.i("MainActivity", "緊湊 widget 更新完成")
+
+                val duration = System.currentTimeMillis() - startTime
+                android.util.Log.i("MainActivity", "所有 widget 更新完成，耗時 ${duration}ms")
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "更新 widget 失敗", e)
+            }
+        }
 
         // 在背景更新過期的股利資料
         kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {

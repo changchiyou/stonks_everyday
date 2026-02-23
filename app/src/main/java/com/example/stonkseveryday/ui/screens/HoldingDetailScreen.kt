@@ -217,36 +217,66 @@ fun HoldingSummaryCard(
                         else
                             MaterialTheme.colorScheme.tertiary  // 虧錢：綠色（台股習慣）
                     )
-                    Text(
-                        text = "${if (holding.profitLossPercentage >= 0) "+" else ""}${"%.2f".format(holding.profitLossPercentage)}%",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (holding.profitLoss >= 0)
-                            MaterialTheme.colorScheme.error  // 賺錢：紅色（台股習慣）
-                        else
-                            MaterialTheme.colorScheme.tertiary  // 虧錢：綠色（台股習慣）
-                    )
+                    // 報酬率顯示：零成本時顯示特殊提示
+                    if (holding.isZeroCost) {
+                        Text(
+                            text = "🎉 零成本",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    } else {
+                        Text(
+                            text = "${if (holding.profitLossPercentage >= 0) "+" else ""}${"%.2f".format(holding.profitLossPercentage)}%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (holding.profitLoss >= 0)
+                                MaterialTheme.colorScheme.error  // 賺錢：紅色（台股習慣）
+                            else
+                                MaterialTheme.colorScheme.tertiary  // 虧錢：綠色（台股習慣）
+                        )
+                    }
                 }
             }
 
-            // 恆定顯示累計股利資訊
+            // 顯示累計股利和調整後成本
             HorizontalDivider()
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    text = "累計股利",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Text(
-                    text = currencyFormat.format(holding.totalDividends),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = if (holding.totalDividends > 0)
-                        MaterialTheme.colorScheme.error  // 股利收入：紅色（台股習慣）
-                    else
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "累計股利",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        text = currencyFormat.format(holding.totalDividends),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (holding.totalDividends > 0)
+                            MaterialTheme.colorScheme.error  // 股利收入：紅色（台股習慣）
+                        else
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "調整後成本",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        text = currencyFormat.format(holding.adjustedCost),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (holding.adjustedCost < 0)
+                            MaterialTheme.colorScheme.primary  // 負成本：特殊顏色
+                        else
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
             }
         }
     }

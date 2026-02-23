@@ -13,10 +13,12 @@ class StockWidgetWorker(
 
     override suspend fun doWork(): Result {
         return try {
-            // Update all widget instances
+            // Update all widget instances (both standard and compact)
             StockWidget().updateAll(applicationContext)
+            CompactStockWidget().updateAll(applicationContext)
             Result.success()
         } catch (e: Exception) {
+            android.util.Log.e("StockWidgetWorker", "Failed to update widgets", e)
             Result.failure()
         }
     }

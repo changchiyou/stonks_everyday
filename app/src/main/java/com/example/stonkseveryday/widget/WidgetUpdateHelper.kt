@@ -11,8 +11,9 @@ object WidgetUpdateHelper {
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
+        // 最短週期是 15 分鐘（Android WorkManager 限制）
         val updateRequest = PeriodicWorkRequestBuilder<StockWidgetWorker>(
-            15, TimeUnit.MINUTES
+            15, TimeUnit.MINUTES  // WorkManager 最短週期
         )
             .setConstraints(constraints)
             .build()

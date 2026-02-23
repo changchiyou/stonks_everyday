@@ -467,9 +467,23 @@ class StockRepository(
                         Log.d("StockRepository", "$code: basePL=$baseProfitLoss, dividends=$totalDividends, include=$includeDividends, finalPL=$profitLoss")
 
                         val costBasis = averageCost * totalQuantity
-                        val profitLossPercentage = if (costBasis > 0) {
-                            (profitLoss / costBasis) * 100
-                        } else 0.0
+
+                        // 調整後成本（扣除股利，可能為負）
+                        val adjustedCostBasis = if (includeDividends) {
+                            costBasis - totalDividends
+                        } else {
+                            costBasis
+                        }
+
+                        // 是否達成零成本
+                        val isZeroCost = includeDividends && (adjustedCostBasis <= 0)
+
+                        // 報酬率計算：成本 > 0 時才計算，否則為 0（UI 會特殊顯示）
+                        val profitLossPercentage = if (adjustedCostBasis > 0) {
+                            (profitLoss / adjustedCostBasis) * 100
+                        } else {
+                            0.0
+                        }
 
                         val holding = StockHolding(
                             stockCode = code,
@@ -482,7 +496,9 @@ class StockRepository(
                             profitLossPercentage = profitLossPercentage,
                             positionRatio = 0.0, // 會在後面計算
                             totalDividends = totalDividends,
-                            isPriceStale = stockPrice?.isStale ?: (stockPrice == null)  // API 失敗或使用過期快取
+                            isPriceStale = stockPrice?.isStale ?: (stockPrice == null),  // API 失敗或使用過期快取
+                            adjustedCost = adjustedCostBasis,
+                            isZeroCost = isZeroCost
                         )
 
                         HoldingWithPrice(holding, previousClose)
@@ -512,9 +528,23 @@ class StockRepository(
 
             // 計算總損益（已經在個別持股計算時處理了股利）
             val totalProfitLoss = updatedHoldings.sumOf { it.profitLoss }
-            val totalProfitLossPercent = if (totalCostBasis > 0) {
-                (totalProfitLoss / totalCostBasis) * 100
-            } else 0.0
+
+            // 計算調整後總成本（扣除股利，可能為負）
+            val adjustedTotalCost = if (includeDividends) {
+                totalCostBasis - totalDividendsSum
+            } else {
+                totalCostBasis
+            }
+
+            // 是否達成零成本投資組合
+            val isPortfolioZeroCost = includeDividends && (adjustedTotalCost <= 0)
+
+            // 總報酬率計算：成本 > 0 時才計算，否則為 0（UI 會特殊顯示）
+            val totalProfitLossPercent = if (adjustedTotalCost > 0) {
+                (totalProfitLoss / adjustedTotalCost) * 100
+            } else {
+                0.0
+            }
 
             // 計算今日損益：(現價 - 昨收) * 持股數
             val todayProfitLoss = stockHoldingsWithPrice.sumOf { hwp ->
@@ -537,7 +567,9 @@ class StockRepository(
                 todayProfitLossPercent = todayProfitLossPercent,
                 totalProfitLoss = totalProfitLoss,
                 totalProfitLossPercent = totalProfitLossPercent,
-                holdings = updatedHoldings
+                holdings = updatedHoldings,
+                adjustedTotalCost = adjustedTotalCost,
+                isPortfolioZeroCost = isPortfolioZeroCost
             )
         }
     }

@@ -10,6 +10,7 @@ import com.example.stonkseveryday.data.model.TransactionType
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -79,15 +80,9 @@ class BackupManager(private val context: Context) {
      */
     suspend fun backupToUri(uri: Uri): Boolean = withContext(Dispatchers.IO) {
         try {
-            val transactions = database.stockTransactionDao().getAllTransactions()
-            val dividends = database.dividendDao().getAllDividends()
-
-            // 需要先轉為 List 才能序列化
-            val txList = mutableListOf<StockTransaction>()
-            val divList = mutableListOf<Dividend>()
-
-            transactions.collect { txList.addAll(it) }
-            dividends.collect { divList.addAll(it) }
+            // 使用 first() 取得資料，而不是 collect
+            val txList = database.stockTransactionDao().getAllTransactions().first()
+            val divList = database.dividendDao().getAllDividends().first()
 
             // 將完整交易記錄轉換為備份格式（移除 stockName 和 isEtf）
             val backupTransactions = txList.map { tx ->
@@ -153,6 +148,12 @@ class BackupManager(private val context: Context) {
 
             val backupData = gson.fromJson(json, BackupData::class.java)
 
+            // 檢查版本相容性
+            if (backupData.version != 2) {
+                android.util.Log.e("BackupManager", "不支援的備份版本: ${backupData.version}，目前僅支援版本 2")
+                return@withContext false
+            }
+
             if (clearExisting) {
                 database.stockTransactionDao().deleteAllTransactions()
                 database.dividendDao().deleteAllDividends()
@@ -186,10 +187,9 @@ class BackupManager(private val context: Context) {
             // 還原股利記錄
             // 需要根據 stockCode 找到對應的新 transactionId
             val transactionMap = mutableMapOf<String, MutableList<Long>>()
-            database.stockTransactionDao().getAllTransactions().collect { txList ->
-                txList.forEach { tx ->
-                    transactionMap.getOrPut(tx.stockCode) { mutableListOf() }.add(tx.id)
-                }
+            val restoredTransactions = database.stockTransactionDao().getAllTransactions().first()
+            restoredTransactions.forEach { tx ->
+                transactionMap.getOrPut(tx.stockCode) { mutableListOf() }.add(tx.id)
             }
 
             backupData.dividends.forEach { backupDiv ->
