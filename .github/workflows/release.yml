@@ -1,0 +1,91 @@
+name: Build and Release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Update version in build.gradle
+        run: |
+          VERSION="${{ inputs.version }}"
+          # Extract version code from version number (e.g., 1.0.0 -> 100)
+          IFS='.' read -ra PARTS <<< "$VERSION"
+          VERSION_CODE=$((${PARTS[0]} * 100 + ${PARTS[1]} * 10 + ${PARTS[2]}))
+
+          # Update versionCode and versionName in app/build.gradle
+          sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/" app/build.gradle
+          sed -i "s/versionName \".*\"/versionName \"$VERSION\"/" app/build.gradle
+
+          echo "Updated version to $VERSION (code: $VERSION_CODE)"
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease
+
+      - name: Sign APK
+        id: sign_apk
+        uses: r0adkll/sign-android-release@v1
+        with:
+          releaseDirectory: app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          alias: ${{ secrets.KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
+        env:
+          BUILD_TOOLS_VERSION: "34.0.0"
+
+      - name: Rename APK
+        run: |
+          mkdir -p release
+          cp ${{ steps.sign_apk.outputs.signedReleaseFile }} release/stonks-everyday-v${{ inputs.version }}.apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ inputs.version }}
+          name: Release v${{ inputs.version }}
+          body: |
+            ## Stonks Everyday v${{ inputs.version }}
+
+            ### Changes
+            - Built from branch: `${{ github.ref_name }}`
+            - Commit: ${{ github.sha }}
+
+            ### Installation
+            Download the APK file below and install it on your Android device.
+
+            **Minimum Android Version:** 7.0 (API 24)
+            **Target Android Version:** 14 (API 36)
+          draft: false
+          prerelease: false
+          files: |
+            release/stonks-everyday-v${{ inputs.version }}.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stonks-everyday-v${{ inputs.version }}
+          path: release/stonks-everyday-v${{ inputs.version }}.apk
+          retention-days: 90
