@@ -21,6 +21,7 @@ import com.example.stonkseveryday.ui.screens.*
 import com.example.stonkseveryday.ui.theme.StonksEverydayTheme
 import com.example.stonkseveryday.ui.viewmodel.StockViewModel
 import com.example.stonkseveryday.widget.WidgetUpdateHelper
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -29,6 +30,22 @@ class MainActivity : ComponentActivity() {
 
         // Schedule widget updates
         WidgetUpdateHelper.scheduleWidgetUpdates(this)
+
+        // 在背景更新過期的股利資料
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val dao = com.example.stonkseveryday.data.database.StockDatabase.getDatabase(applicationContext).stockTransactionDao()
+                val repository = com.example.stonkseveryday.data.repository.StockRepository(dao, applicationContext)
+                val userPreferences = com.example.stonkseveryday.data.preferences.UserPreferences(applicationContext)
+                val token = userPreferences.finmindToken.first()
+
+                android.util.Log.i("MainActivity", "開始背景更新股利資料")
+                val count = repository.updateStaleDividends(token)
+                android.util.Log.i("MainActivity", "背景更新完成，更新了 $count 支股票")
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "背景更新股利失敗", e)
+            }
+        }
 
         setContent {
             StonksEverydayTheme {
@@ -56,6 +73,9 @@ fun StockTradingApp() {
     val defaultFeeRate by userPreferences.defaultFeeRate.collectAsState(initial = 0.1425)
     val defaultStockTaxRate by userPreferences.defaultStockTaxRate.collectAsState(initial = 0.3)
     val defaultEtfTaxRate by userPreferences.defaultEtfTaxRate.collectAsState(initial = 0.1)
+    val includeDividends by userPreferences.includeDividends.collectAsState(initial = true)
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val lastRefreshTime by viewModel.lastRefreshTime.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val successMessage by viewModel.successMessage.collectAsState()
 
@@ -64,6 +84,7 @@ fun StockTradingApp() {
     var selectedHolding by remember { mutableStateOf<StockHolding?>(null) }
     var holdingDetails by remember { mutableStateOf<List<com.example.stonkseveryday.data.model.HoldingDetail>>(emptyList()) }
     var showExitDialog by remember { mutableStateOf(false) }
+    var transactionToEdit by remember { mutableStateOf<com.example.stonkseveryday.data.model.StockTransaction?>(null) }
 
     // Backup launcher
     val backupLauncher = rememberLauncherForActivityResult(
@@ -76,7 +97,7 @@ fun StockTradingApp() {
     val restoreLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
-        uri?.let { viewModel.restoreData(it) }
+        uri?.let { viewModel.restoreData(it, currentToken) }
     }
 
     // Show error/success messages
@@ -99,16 +120,21 @@ fun StockTradingApp() {
             BackHandler { showAddTransaction = false }
 
             AddTransactionScreen(
-                onNavigateBack = { showAddTransaction = false },
+                onNavigateBack = {
+                    showAddTransaction = false
+                    transactionToEdit = null
+                },
                 onSaveTransaction = { transaction ->
                     viewModel.insertTransaction(transaction)
+                    transactionToEdit = null
                 },
                 onFetchStockInfo = { stockCode ->
                     viewModel.fetchStockInfo(stockCode)
                 },
                 defaultFeeRate = defaultFeeRate,
                 defaultStockTaxRate = defaultStockTaxRate,
-                defaultEtfTaxRate = defaultEtfTaxRate
+                defaultEtfTaxRate = defaultEtfTaxRate,
+                editingTransaction = transactionToEdit
             )
         }
         selectedHolding != null -> {
@@ -119,13 +145,16 @@ fun StockTradingApp() {
                 holding = selectedHolding!!,
                 holdingDetails = holdingDetails,
                 onNavigateBack = { selectedHolding = null },
-                onCalculateDividends = {
-                    selectedHolding?.let { holding ->
-                        viewModel.calculateDividends(
-                            stockCode = holding.stockCode,
-                            token = currentToken
-                        )
+                onTransactionClick = { transactionId ->
+                    // 找到對應的交易記錄並進入編輯模式
+                    transactions.find { it.id == transactionId }?.let { transaction ->
+                        transactionToEdit = transaction
+                        showAddTransaction = true
+                        selectedHolding = null
                     }
+                },
+                onDeleteTransaction = { transactionId ->
+                    viewModel.deleteTransaction(transactionId)
                 }
             )
         }
@@ -168,6 +197,9 @@ fun StockTradingApp() {
                 },
                 onClearAll = {
                     viewModel.clearAllData()
+                },
+                onCalculateAllDividends = {
+                    viewModel.calculateAllDividends(currentToken)
                 }
             )
         }
@@ -181,14 +213,35 @@ fun StockTradingApp() {
                 onAddTransaction = { showAddTransaction = true },
                 onTransactionClick = { /* 可以在這裡加入編輯功能 */ },
                 onHoldingClick = { holding ->
+                    println("[CLICK] 持股卡片被點擊: ${holding.stockCode}")
                     scope.launch {
-                        val details = viewModel.getHoldingDetails(holding.stockCode, holding.currentPrice)
-                        holdingDetails = details
-                        selectedHolding = holding
+                        println("[LAUNCH] Coroutine 啟動")
+                        try {
+                            println("[BEFORE] 準備呼叫 getHoldingDetails")
+                            val details = viewModel.getHoldingDetails(holding.stockCode, holding.currentPrice)
+                            println("[AFTER] 取得 ${details.size} 筆明細")
+                            holdingDetails = details
+                            selectedHolding = holding
+                            println("[DONE] selectedHolding = ${selectedHolding?.stockCode}")
+                        } catch (e: Exception) {
+                            println("[ERROR] ${e.message}")
+                            e.printStackTrace()
+                        }
                     }
                 },
                 onOpenSettings = { showSettings = true },
-                showHoldingsView = true
+                showHoldingsView = true,
+                includeDividends = includeDividends,
+                onIncludeDividendsChange = { include ->
+                    scope.launch {
+                        userPreferences.saveIncludeDividends(include)
+                    }
+                },
+                isRefreshing = isRefreshing,
+                lastRefreshTime = lastRefreshTime,
+                onRefresh = {
+                    viewModel.refreshStockPrices()
+                }
             )
         }
     }

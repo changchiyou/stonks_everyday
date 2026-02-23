@@ -26,6 +26,9 @@ import com.example.stonkseveryday.data.model.TransactionType
 import com.example.stonkseveryday.data.repository.StockRepository
 import kotlinx.coroutines.flow.first
 import java.text.NumberFormat
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class StockWidget : GlanceAppWidget() {
 
@@ -48,11 +51,16 @@ class StockWidget : GlanceAppWidget() {
         val allTransactions = repository.allTransactions.first()
         val summary = calculateQuickSummary(allTransactions)
 
+        // 儲存最後刷新時間
+        val prefs = context.getSharedPreferences("widget_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putLong("last_refresh_time", System.currentTimeMillis()).apply()
+
         provideContent {
             WidgetContent(
                 dailyProfitLoss = dailyProfitLoss,
                 totalProfitLoss = summary.totalProfitLoss,
                 totalAssets = summary.totalAssets,
+                lastRefreshTime = System.currentTimeMillis(),
                 isCompact = false
             )
         }
@@ -102,15 +110,50 @@ class StockWidget : GlanceAppWidget() {
 }
 
 /**
- * 格式化金額，使用 K 表示千
+ * 格式化金額
+ * - 緊湊模式：>= 1000 使用 K/M 格式
+ * - 一般模式：>= 1,000,000 使用 M 格式，>= 10,000 使用 K 格式
+ * - 移除不必要的 .00 後綴
  */
 private fun formatAmount(amount: Double, useShortFormat: Boolean = false): String {
-    return if (useShortFormat && Math.abs(amount) >= 1000) {
-        val kAmount = amount / 1000
-        String.format("%.1fK", kAmount)
+    val absAmount = Math.abs(amount)
+    val sign = if (amount < 0) "-" else ""
+
+    return if (useShortFormat) {
+        // 緊湊模式：適用於小 widget
+        when {
+            absAmount >= 1_000_000 -> String.format("%s%.1fM", sign, absAmount / 1_000_000)
+            absAmount >= 1_000 -> String.format("%s%.1fK", sign, absAmount / 1_000)
+            else -> String.format("%s%.0f", sign, absAmount)
+        }
     } else {
-        val currencyFormat = NumberFormat.getCurrencyInstance(java.util.Locale.TAIWAN)
-        currencyFormat.format(amount)
+        // 一般模式：適用於主畫面和大 widget
+        when {
+            absAmount >= 10_000_000 -> String.format("%s%.2fM", sign, absAmount / 1_000_000)
+            absAmount >= 1_000_000 -> String.format("%s%.1fM", sign, absAmount / 1_000_000)
+            absAmount >= 100_000 -> String.format("%s%.1fK", sign, absAmount / 1_000)
+            absAmount >= 1_000 -> String.format("%s%.0fK", sign, absAmount / 1_000)
+            else -> String.format("%s%.0f", sign, absAmount)
+        }
+    }
+}
+
+/**
+ * 格式化刷新時間為相對時間（精確到分鐘）
+ */
+private fun formatRefreshTime(timestamp: Long): String {
+    val now = System.currentTimeMillis()
+    val diffMinutes = ((now - timestamp) / 60000).toInt()
+
+    return when {
+        diffMinutes == 0 -> "剛剛"
+        diffMinutes < 60 -> "${diffMinutes}分鐘前"
+        else -> {
+            val hours = diffMinutes / 60
+            val minutes = diffMinutes % 60
+            if (minutes == 0) "${hours}小時前"
+            else "${hours}小時${minutes}分鐘前"
+        }
     }
 }
 
@@ -119,9 +162,11 @@ fun WidgetContent(
         dailyProfitLoss: Double,
         totalProfitLoss: Double,
         totalAssets: Double,
+        lastRefreshTime: Long = System.currentTimeMillis(),
         isCompact: Boolean = false
     ) {
         val currencyFormat = NumberFormat.getCurrencyInstance(java.util.Locale.TAIWAN)
+        val refreshTimeText = formatRefreshTime(lastRefreshTime)
 
         Box(
             modifier = GlanceModifier
@@ -135,7 +180,7 @@ fun WidgetContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Title with refresh action
+                // Title with refresh action and refresh time
                 Row(
                     modifier = GlanceModifier
                         .fillMaxWidth()
@@ -143,14 +188,36 @@ fun WidgetContent(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = if (isCompact) "SE" else "Stonks Everyday",
-                        style = TextStyle(
-                            fontSize = if (isCompact) 11.sp else 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = ColorProvider(day = Color.Black, night = Color.White)
+                    if (isCompact) {
+                        // 精簡版：只顯示刷新時間
+                        Text(
+                            text = refreshTimeText,
+                            style = TextStyle(
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Normal,
+                                color = ColorProvider(day = Color.Gray, night = Color.LightGray)
+                            )
                         )
-                    )
+                    } else {
+                        // 一般版：標題 + 刷新時間
+                        Text(
+                            text = "Stonks Everyday",
+                            style = TextStyle(
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = ColorProvider(day = Color.Black, night = Color.White)
+                            )
+                        )
+                        Spacer(modifier = GlanceModifier.width(8.dp))
+                        Text(
+                            text = refreshTimeText,
+                            style = TextStyle(
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Normal,
+                                color = ColorProvider(day = Color.Gray, night = Color.LightGray)
+                            )
+                        )
+                    }
                 }
 
                 Spacer(modifier = GlanceModifier.height(if (isCompact) 4.dp else 8.dp))
@@ -178,9 +245,11 @@ fun WidgetContent(
                             fontSize = if (isCompact) 20.sp else 24.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (dailyProfitLoss >= 0) {
-                                ColorProvider(day = Color(0xFF2E7D32), night = Color(0xFF4CAF50))
-                            } else {
+                                // 賺錢：紅色（台股習慣）
                                 ColorProvider(day = Color(0xFFC62828), night = Color(0xFFEF5350))
+                            } else {
+                                // 虧錢：綠色（台股習慣）
+                                ColorProvider(day = Color(0xFF2E7D32), night = Color(0xFF4CAF50))
                             }
                         )
                     )
@@ -248,9 +317,11 @@ fun WidgetContent(
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (totalProfitLoss >= 0) {
-                                    ColorProvider(day = Color(0xFF2E7D32), night = Color(0xFF4CAF50))
-                                } else {
+                                    // 賺錢：紅色（台股習慣）
                                     ColorProvider(day = Color(0xFFC62828), night = Color(0xFFEF5350))
+                                } else {
+                                    // 虧錢：綠色（台股習慣）
+                                    ColorProvider(day = Color(0xFF2E7D32), night = Color(0xFF4CAF50))
                                 }
                             )
                         )
@@ -263,6 +334,7 @@ fun WidgetContent(
 
 /**
  * Widget 更新回調
+ * 使用 GlanceAppWidgetManager 來更新正確的 widget
  */
 class RefreshWidgetCallback : androidx.glance.appwidget.action.ActionCallback {
     override suspend fun onAction(
@@ -270,8 +342,19 @@ class RefreshWidgetCallback : androidx.glance.appwidget.action.ActionCallback {
         glanceId: GlanceId,
         parameters: androidx.glance.action.ActionParameters
     ) {
-        // 觸發 Widget 更新
-        StockWidget().update(context, glanceId)
+        // 取得 widget 的實際類型並更新
+        val manager = androidx.glance.appwidget.GlanceAppWidgetManager(context)
+        val appWidgetId = manager.getAppWidgetId(glanceId)
+
+        // 檢查這個 glanceId 屬於哪個 widget
+        val compactIds = manager.getGlanceIds(CompactStockWidget::class.java)
+        val standardIds = manager.getGlanceIds(StockWidget::class.java)
+
+        when (glanceId) {
+            in compactIds -> CompactStockWidget().update(context, glanceId)
+            in standardIds -> StockWidget().update(context, glanceId)
+            else -> StockWidget().update(context, glanceId) // 預設
+        }
     }
 }
 
@@ -290,6 +373,7 @@ fun StockWidgetPreview() {
         dailyProfitLoss = 1250.0,
         totalProfitLoss = 15320.0,
         totalAssets = 125000.0,
+        lastRefreshTime = System.currentTimeMillis() - 300000, // 5 分鐘前
         isCompact = false
     )
 }
@@ -305,6 +389,7 @@ fun StockWidgetLargePreview() {
         dailyProfitLoss = -850.0,
         totalProfitLoss = -3200.0,
         totalAssets = 98000.0,
+        lastRefreshTime = System.currentTimeMillis() - 3600000, // 1 小時前
         isCompact = false
     )
 }

@@ -25,9 +25,12 @@ fun HoldingDetailScreen(
     holding: StockHolding,
     holdingDetails: List<HoldingDetail>,
     onNavigateBack: () -> Unit,
-    onCalculateDividends: () -> Unit = {}
+    onTransactionClick: (Long) -> Unit = {},
+    onDeleteTransaction: (Long) -> Unit = {}
 ) {
     val currencyFormat = NumberFormat.getCurrencyInstance(Locale("zh", "TW"))
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var transactionToDelete by remember { mutableStateOf<Long?>(null) }
 
     Scaffold(
         topBar = {
@@ -54,39 +57,30 @@ fun HoldingDetailScreen(
         ) {
             item {
                 Spacer(modifier = Modifier.height(8.dp))
-                HoldingSummaryCard(holding = holding, currencyFormat = currencyFormat)
+                HoldingSummaryCard(
+                    holding = holding,
+                    currencyFormat = currencyFormat
+                )
             }
 
             item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "交易明細",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    OutlinedButton(
-                        onClick = onCalculateDividends,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        Text(
-                            text = "自動計算股利",
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-                }
+                Text(
+                    text = "交易明細",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
             }
 
             items(holdingDetails) { detail ->
                 HoldingDetailCard(
                     detail = detail,
-                    currencyFormat = currencyFormat
+                    currencyFormat = currencyFormat,
+                    onEditClick = { onTransactionClick(detail.transaction.id) },
+                    onDeleteClick = {
+                        transactionToDelete = detail.transaction.id
+                        showDeleteDialog = true
+                    }
                 )
             }
 
@@ -94,6 +88,31 @@ fun HoldingDetailScreen(
                 Spacer(modifier = Modifier.height(80.dp))
             }
         }
+    }
+
+    // 刪除確認對話框
+    if (showDeleteDialog && transactionToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("刪除交易記錄") },
+            text = { Text("確定要刪除這筆交易記錄嗎？此操作無法復原。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        transactionToDelete?.let { onDeleteTransaction(it) }
+                        showDeleteDialog = false
+                        transactionToDelete = null
+                    }
+                ) {
+                    Text("刪除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 
@@ -194,38 +213,40 @@ fun HoldingSummaryCard(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = if (holding.profitLoss >= 0)
-                            MaterialTheme.colorScheme.tertiary
+                            MaterialTheme.colorScheme.error  // 賺錢：紅色（台股習慣）
                         else
-                            MaterialTheme.colorScheme.error
+                            MaterialTheme.colorScheme.tertiary  // 虧錢：綠色（台股習慣）
                     )
                     Text(
                         text = "${if (holding.profitLossPercentage >= 0) "+" else ""}${"%.2f".format(holding.profitLossPercentage)}%",
                         style = MaterialTheme.typography.bodySmall,
                         color = if (holding.profitLoss >= 0)
-                            MaterialTheme.colorScheme.tertiary
+                            MaterialTheme.colorScheme.error  // 賺錢：紅色（台股習慣）
                         else
-                            MaterialTheme.colorScheme.error
+                            MaterialTheme.colorScheme.tertiary  // 虧錢：綠色（台股習慣）
                     )
                 }
             }
 
-            if (holding.totalDividends > 0) {
-                HorizontalDivider()
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "累計股利",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text(
-                        text = currencyFormat.format(holding.totalDividends),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.tertiary
-                    )
-                }
+            // 恆定顯示累計股利資訊
+            HorizontalDivider()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "累計股利",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = currencyFormat.format(holding.totalDividends),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = if (holding.totalDividends > 0)
+                        MaterialTheme.colorScheme.error  // 股利收入：紅色（台股習慣）
+                    else
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
             }
         }
     }
@@ -234,7 +255,9 @@ fun HoldingSummaryCard(
 @Composable
 fun HoldingDetailCard(
     detail: HoldingDetail,
-    currencyFormat: NumberFormat
+    currencyFormat: NumberFormat,
+    onEditClick: () -> Unit = {},
+    onDeleteClick: () -> Unit = {}
 ) {
     val dateFormat = SimpleDateFormat("yyyy/MM/dd", Locale.getDefault())
 
@@ -275,9 +298,9 @@ fun HoldingDetailCard(
                 )
                 Surface(
                     color = if (detail.transaction.transactionType == TransactionType.BUY)
-                        MaterialTheme.colorScheme.errorContainer
+                        MaterialTheme.colorScheme.tertiaryContainer  // 買入：綠色背景
                     else
-                        MaterialTheme.colorScheme.tertiaryContainer,
+                        MaterialTheme.colorScheme.errorContainer,  // 賣出：紅色背景
                     shape = MaterialTheme.shapes.small
                 ) {
                     Text(
@@ -306,9 +329,9 @@ fun HoldingDetailCard(
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold,
                         color = if (detail.unrealizedPL >= 0)
-                            MaterialTheme.colorScheme.tertiary
+                            MaterialTheme.colorScheme.error  // 賺錢：紅色（台股習慣）
                         else
-                            MaterialTheme.colorScheme.error
+                            MaterialTheme.colorScheme.tertiary  // 虧錢：綠色（台股習慣）
                     )
                 }
 
@@ -323,46 +346,73 @@ fun HoldingDetailCard(
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold,
                         color = if (detail.unrealizedPL >= 0)
-                            MaterialTheme.colorScheme.tertiary
+                            MaterialTheme.colorScheme.error  // 賺錢：紅色（台股習慣）
                         else
-                            MaterialTheme.colorScheme.error
+                            MaterialTheme.colorScheme.tertiary  // 虧錢：綠色（台股習慣）
                     )
                 }
             }
 
-            // 如果有股利，顯示含股利的損益
-            if (detail.totalDividends > 0) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "累計股利",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.tertiary
-                        )
-                        Text(
-                            text = currencyFormat.format(detail.totalDividends),
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.tertiary
-                        )
-                    }
+            // 恆定顯示累計股利資訊
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "累計股利",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = currencyFormat.format(detail.totalDividends),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = if (detail.totalDividends > 0)
+                            MaterialTheme.colorScheme.error  // 股利收入：紅色（台股習慣）
+                        else
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
 
-                    Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                        Text(
-                            text = "含股利損益",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.tertiary
-                        )
-                        Text(
-                            text = "${if (detail.plWithDividends >= 0) "+" else ""}${currencyFormat.format(detail.plWithDividends)}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.tertiary
-                        )
-                    }
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "含股利損益",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "${if (detail.plWithDividends >= 0) "+" else ""}${currencyFormat.format(detail.plWithDividends)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (detail.plWithDividends >= 0)
+                            MaterialTheme.colorScheme.error  // 賺錢：紅色（台股習慣）
+                        else
+                            MaterialTheme.colorScheme.tertiary  // 虧錢：綠色（台股習慣）
+                    )
+                }
+            }
+
+            // 操作按鈕
+            HorizontalDivider()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onEditClick,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("編輯")
+                }
+                OutlinedButton(
+                    onClick = onDeleteClick,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("刪除")
                 }
             }
         }

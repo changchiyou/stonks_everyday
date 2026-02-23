@@ -3,6 +3,7 @@ package com.example.stonkseveryday.data.preferences
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -19,6 +20,7 @@ class UserPreferences(private val context: Context) {
         private val DEFAULT_FEE_RATE = doublePreferencesKey("default_fee_rate")
         private val DEFAULT_STOCK_TAX_RATE = doublePreferencesKey("default_stock_tax_rate")
         private val DEFAULT_ETF_TAX_RATE = doublePreferencesKey("default_etf_tax_rate")
+        private val INCLUDE_DIVIDENDS = booleanPreferencesKey("include_dividends")
     }
 
     /**
@@ -91,6 +93,22 @@ class UserPreferences(private val context: Context) {
     suspend fun saveDefaultEtfTaxRate(rate: Double) {
         context.dataStore.edit { preferences ->
             preferences[DEFAULT_ETF_TAX_RATE] = rate
+        }
+    }
+
+    /**
+     * 取得是否將股利納入損益計算
+     */
+    val includeDividends: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[INCLUDE_DIVIDENDS] ?: true  // 預設為 true（納入計算）
+    }
+
+    /**
+     * 儲存是否將股利納入損益計算
+     */
+    suspend fun saveIncludeDividends(include: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[INCLUDE_DIVIDENDS] = include
         }
     }
 }

@@ -20,5 +20,6 @@ data class StockHolding(
     val profitLoss: Double,           // 損益金額
     val profitLossPercentage: Double, // 報酬率 %
     val positionRatio: Double,        // 持股比重 %
-    val totalDividends: Double = 0.0  // 累計股利
+    val totalDividends: Double = 0.0, // 累計股利
+    val isPriceStale: Boolean = false // 股價資料是否過期（API 失敗，使用快取）
 )

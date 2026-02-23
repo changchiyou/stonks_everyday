@@ -15,7 +15,7 @@ interface DividendDao {
     @Query("SELECT * FROM dividends WHERE stockCode = :stockCode ORDER BY exDividendDate DESC")
     fun getDividendsByStockCode(stockCode: String): Flow<List<Dividend>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertDividend(dividend: Dividend): Long
 
     @Update

@@ -27,7 +27,8 @@ fun SettingsScreen(
     onSaveEtfTaxRate: (Double) -> Unit,
     onBackup: () -> Unit = {},
     onRestore: () -> Unit = {},
-    onClearAll: () -> Unit = {}
+    onClearAll: () -> Unit = {},
+    onCalculateAllDividends: () -> Unit = {}
 ) {
     var tokenInput by remember { mutableStateOf(currentToken) }
     var feeRateInput by remember { mutableStateOf(defaultFeeRate.toString()) }
@@ -237,6 +238,34 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
+
+            Card(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "股利計算",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Text(
+                        text = "重新計算所有持股的股利資料。股利會在交易記錄變更時自動計算，通常不需要手動執行。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                    )
+
+                    Button(
+                        onClick = onCalculateAllDividends,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("計算所有股利")
+                    }
+                }
+            }
 
             Card(
                 modifier = Modifier.fillMaxWidth()

@@ -20,6 +20,8 @@ class StockRepository(
     private val userPreferences = UserPreferences(context)
     private val database = com.example.stonkseveryday.data.database.StockDatabase.getDatabase(context)
     private val dividendDao = database.dividendDao()
+    private val dividendCalculationRecordDao = database.dividendCalculationRecordDao()
+    private val stockPriceCacheDao = database.stockPriceCacheDao()
 
     val allTransactions: Flow<List<StockTransaction>> = dao.getAllTransactions()
     val todayTransactions: Flow<List<StockTransaction>> = dao.getTodayTransactions()
@@ -45,11 +47,23 @@ class StockRepository(
         dividendDao.deleteDividend(dividend)
     }
 
+    suspend fun deleteDividendsByStockCode(stockCode: String) {
+        // 取得該股票的所有股利記錄並刪除
+        val dividends = dividendDao.getDividendsByStockCode(stockCode).first()
+        dividends.forEach { dividend ->
+            dividendDao.deleteDividend(dividend)
+        }
+        // 同時清除股利計算記錄，讓下次可以重新計算
+        dividendCalculationRecordDao.deleteRecord(stockCode)
+    }
+
+    suspend fun deleteAllDividends() {
+        dividendDao.deleteAllDividends()
+        dividendCalculationRecordDao.deleteAll()
+    }
+
     suspend fun getDividendsByTransaction(transactionId: Long): List<com.example.stonkseveryday.data.model.Dividend> {
-        val flow = dividendDao.getDividendsByTransactionId(transactionId)
-        var result = listOf<com.example.stonkseveryday.data.model.Dividend>()
-        flow.collect { result = it }
-        return result
+        return dividendDao.getDividendsByTransactionId(transactionId).first()
     }
 
     /**
@@ -154,27 +168,88 @@ class StockRepository(
     /**
      * 取得台股即時股價
      * 策略：
-     * 1. 如果使用者有設定 FinMind Token，優先使用 FinMind API
-     * 2. 如果沒有 Token 或 FinMind 失敗，使用 TWSE 官方 API（完全免費）
+     * 1. 優先使用 TWSE 官方 API（有真正的即時價格和昨收，適合計算今日損益）
+     * 2. 如果 TWSE 失敗，使用 FinMind API（歷史收盤價）
      *
      * @param stockCode 股票代碼 (例如: 2330)
      * @return 股價資訊或 null（如果兩個 API 都失敗）
      */
     suspend fun getStockPrice(stockCode: String): StockPriceResponse? {
-        // 取得使用者設定的 Token
-        val userToken = userPreferences.finmindToken.first()
+        Log.d("StockRepository", "getStockPrice for $stockCode")
 
-        // 策略 1: 如果使用者有設定 Token，優先使用 FinMind API
-        if (userToken.isNotBlank()) {
-            val finMindPrice = getStockPriceFromFinMind(stockCode, userToken)
-            if (finMindPrice != null) {
-                return finMindPrice
+        // 策略 0: 先檢查快取是否新鮮（5分鐘內）
+        val cachedPrice = stockPriceCacheDao.getPriceCache(stockCode)
+        if (cachedPrice != null) {
+            val ageInMinutes = (System.currentTimeMillis() - cachedPrice.lastUpdateTime) / (1000 * 60)
+            if (ageInMinutes < 5) {
+                Log.d("StockRepository", "Using fresh cache for $stockCode (age: ${ageInMinutes}m)")
+                return StockPriceResponse(
+                    stockCode = cachedPrice.stockCode,
+                    currentPrice = cachedPrice.currentPrice,
+                    previousClose = cachedPrice.previousClose,
+                    change = cachedPrice.change,
+                    changePercent = cachedPrice.changePercent,
+                    timestamp = cachedPrice.lastUpdateTime,
+                    isStale = false
+                )
             }
-            Log.w("StockRepository", "FinMind API failed for $stockCode, falling back to TWSE API")
         }
 
-        // 策略 2: 使用 TWSE 官方 API（完全免費，無需 Token）
-        return getStockPriceFromTwse(stockCode)
+        // 策略 1: 快取過期，嘗試 TWSE API（有即時價格和昨收，適合計算今日損益）
+        val twsePrice = getStockPriceFromTwse(stockCode)
+        if (twsePrice != null) {
+            Log.i("StockRepository", "TWSE API success: $stockCode")
+            // 成功時更新快取
+            cacheStockPrice(twsePrice)
+            return twsePrice
+        }
+
+        // 策略 2: TWSE 失敗時使用 FinMind API（可能是非交易時段或網路問題）
+        val userToken = userPreferences.finmindToken.first()
+        if (userToken.isNotBlank()) {
+            Log.d("StockRepository", "TWSE failed, trying FinMind API")
+            val finMindPrice = getStockPriceFromFinMind(stockCode, userToken)
+            if (finMindPrice != null) {
+                Log.i("StockRepository", "FinMind API success: $stockCode")
+                // 成功時更新快取
+                cacheStockPrice(finMindPrice)
+                return finMindPrice
+            }
+        }
+
+        // 策略 3: 兩個 API 都失敗，使用快取的股價（即使過期）
+        if (cachedPrice != null) {
+            val ageInHours = (System.currentTimeMillis() - cachedPrice.lastUpdateTime) / (1000 * 60 * 60)
+            Log.w("StockRepository", "Both APIs failed for $stockCode, using stale cache (age: ${ageInHours}h)")
+            return StockPriceResponse(
+                stockCode = cachedPrice.stockCode,
+                currentPrice = cachedPrice.currentPrice,
+                previousClose = cachedPrice.previousClose,
+                change = cachedPrice.change,
+                changePercent = cachedPrice.changePercent,
+                timestamp = cachedPrice.lastUpdateTime,
+                isStale = true  // 標記為過期
+            )
+        }
+
+        Log.e("StockRepository", "No data available for $stockCode (APIs failed and no cache)")
+        return null
+    }
+
+    /**
+     * 快取股價到資料庫
+     */
+    private suspend fun cacheStockPrice(price: StockPriceResponse) {
+        val cache = com.example.stonkseveryday.data.model.StockPriceCache(
+            stockCode = price.stockCode,
+            currentPrice = price.currentPrice,
+            previousClose = price.previousClose,
+            change = price.change,
+            changePercent = price.changePercent,
+            lastUpdateTime = System.currentTimeMillis(),
+            isStale = false
+        )
+        stockPriceCacheDao.insertOrUpdate(cache)
     }
 
     /**
@@ -188,22 +263,36 @@ class StockRepository(
         val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         val today = dateFormat.format(Date())
 
+        val calendar = java.util.Calendar.getInstance()
+        calendar.add(java.util.Calendar.DAY_OF_YEAR, -30)  // 查詢最近 30 天（考慮農曆新年等長假）
+        val startDate = dateFormat.format(calendar.time)
+
+        Log.d("StockRepository", "FinMind API 查詢: code=$stockCode, startDate=$startDate, endDate=$today")
+
         val response = RetrofitInstance.stockApiService.getTaiwanStockPrice(
             stockCode = stockCode,
-            startDate = today,
+            startDate = startDate,
+            endDate = today,
             token = userToken
         )
+
+        Log.d("StockRepository", "FinMind API 回應: status=${response.status}, data.size=${response.data.size}")
 
         if (response.status == 200 && response.data.isNotEmpty()) {
             val latestData = response.data.last()
             val previousData = response.data.getOrNull(response.data.size - 2)
 
+            // FinMind 只有歷史收盤價，沒有即時價格
+            // currentPrice = 最新一筆的收盤價（可能是今天或最近交易日）
+            // previousClose = 前一個交易日的收盤價
             val currentPrice = latestData.close
-            val previousClose = previousData?.close ?: latestData.open
+            val previousClose = previousData?.close ?: latestData.close
             val change = currentPrice - previousClose
             val changePercent = if (previousClose != 0.0) {
                 (change / previousClose) * 100
             } else 0.0
+
+            Log.d("StockRepository", "FinMind: current=$currentPrice, previous=$previousClose, date=${latestData.date}")
 
             StockPriceResponse(
                 stockCode = stockCode,
@@ -308,7 +397,8 @@ class StockRepository(
         return priceMap
     }
 
-    fun calculateSummary(transactions: List<StockTransaction>): Flow<StockSummary> {
+    fun calculateSummary(transactions: List<StockTransaction>, includeDividends: Boolean = true): Flow<StockSummary> {
+        Log.d("StockRepository", "calculateSummary called with includeDividends = $includeDividends")
         return allTransactions.map { txList ->
             val holdings = mutableMapOf<String, MutableList<StockTransaction>>()
 
@@ -317,8 +407,14 @@ class StockRepository(
                 holdings.getOrPut(tx.stockCode) { mutableListOf() }.add(tx)
             }
 
+            // 用於計算今日損益的資料
+            data class HoldingWithPrice(
+                val holding: StockHolding,
+                val previousClose: Double
+            )
+
             // Calculate holdings
-            val stockHoldings = holdings.mapNotNull { (code, txs) ->
+            val stockHoldingsWithPrice = holdings.mapNotNull { (code, txs) ->
                 var totalQuantity = 0
                 var totalCost = 0.0
 
@@ -338,7 +434,7 @@ class StockRepository(
                 if (totalQuantity > 0) {
                     val averageCost = totalCost / totalQuantity
 
-                    // 嘗試從 API 取得即時股價，失敗則不顯示該持股的未實現損益
+                    // 嘗試從 API 取得即時股價
                     val stockPrice = try {
                         getStockPrice(code)
                     } catch (e: Exception) {
@@ -354,13 +450,28 @@ class StockRepository(
                         0.0
                     }
 
-                    if (stockPrice != null) {
-                        val currentPrice = stockPrice.currentPrice
-                        val currentValue = currentPrice * totalQuantity
-                        val profitLoss = (currentPrice - averageCost) * totalQuantity
-                        val profitLossPercentage = ((currentPrice - averageCost) / averageCost) * 100
+                    // API 成功時使用即時股價，失敗時使用成本價（讓使用者至少能看到持股）
+                    val currentPrice = stockPrice?.currentPrice ?: averageCost
+                    val previousClose = stockPrice?.previousClose ?: averageCost
 
-                        StockHolding(
+                    if (stockPrice != null || totalQuantity > 0) {  // 只要有持股就顯示
+                        val currentValue = currentPrice * totalQuantity
+                        val baseProfitLoss = (currentPrice - averageCost) * totalQuantity
+
+                        // 根據開關決定損益是否含股利
+                        val profitLoss = if (includeDividends) {
+                            baseProfitLoss + totalDividends
+                        } else {
+                            baseProfitLoss
+                        }
+                        Log.d("StockRepository", "$code: basePL=$baseProfitLoss, dividends=$totalDividends, include=$includeDividends, finalPL=$profitLoss")
+
+                        val costBasis = averageCost * totalQuantity
+                        val profitLossPercentage = if (costBasis > 0) {
+                            (profitLoss / costBasis) * 100
+                        } else 0.0
+
+                        val holding = StockHolding(
                             stockCode = code,
                             stockName = txs.first().stockName,
                             quantity = totalQuantity,
@@ -370,8 +481,11 @@ class StockRepository(
                             profitLoss = profitLoss,
                             profitLossPercentage = profitLossPercentage,
                             positionRatio = 0.0, // 會在後面計算
-                            totalDividends = totalDividends
+                            totalDividends = totalDividends,
+                            isPriceStale = stockPrice?.isStale ?: (stockPrice == null)  // API 失敗或使用過期快取
                         )
+
+                        HoldingWithPrice(holding, previousClose)
                     } else {
                         // API 失敗，跳過此持股（不顯示錯誤資料）
                         Log.w("StockRepository", "Skipping $code due to API failure")
@@ -379,6 +493,8 @@ class StockRepository(
                     }
                 } else null
             }
+
+            val stockHoldings = stockHoldingsWithPrice.map { it.holding }
 
             // 計算總資產和持股比重
             val totalCurrentValue = stockHoldings.sumOf { it.currentValue }
@@ -394,16 +510,25 @@ class StockRepository(
                 )
             }
 
-            // 計算總損益（含股利）
-            val totalProfitLoss = stockHoldings.sumOf { it.profitLoss } + totalDividendsSum
+            // 計算總損益（已經在個別持股計算時處理了股利）
+            val totalProfitLoss = updatedHoldings.sumOf { it.profitLoss }
             val totalProfitLossPercent = if (totalCostBasis > 0) {
                 (totalProfitLoss / totalCostBasis) * 100
             } else 0.0
 
-            // 計算今日損益
-            // 這裡假設有保存昨日收盤價的機制，暫時簡化為 0
-            val todayProfitLoss = 0.0
-            val todayProfitLossPercent = 0.0
+            // 計算今日損益：(現價 - 昨收) * 持股數
+            val todayProfitLoss = stockHoldingsWithPrice.sumOf { hwp ->
+                (hwp.holding.currentPrice - hwp.previousClose) * hwp.holding.quantity
+            }
+
+            // 計算昨日總市值
+            val yesterdayTotalValue = stockHoldingsWithPrice.sumOf { hwp ->
+                hwp.previousClose * hwp.holding.quantity
+            }
+
+            val todayProfitLossPercent = if (yesterdayTotalValue > 0) {
+                (todayProfitLoss / yesterdayTotalValue) * 100
+            } else 0.0
 
             StockSummary(
                 totalAssets = totalCurrentValue,
@@ -434,6 +559,7 @@ class StockRepository(
             }
 
             if (transactions.isEmpty()) {
+                Log.w("StockRepository", "$stockCode 沒有買入交易記錄")
                 return 0
             }
 
@@ -451,95 +577,228 @@ class StockRepository(
             } ?: return 0
 
             // 3. 從 FinMind API 取得股利資料
+            val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+
+            Log.d("StockRepository", "查詢股利: code=$stockCode, startDate=$startDate, endDate=$today, token=${if(token.isNotBlank()) "有" else "無"}")
+
             val dividendResponse = RetrofitInstance.stockApiService
                 .getTaiwanStockDividend(
                     stockCode = stockCode,
                     startDate = startDate,
+                    endDate = today,
                     token = token
                 )
 
-            if (dividendResponse.status != 200 || dividendResponse.data.isEmpty()) {
+            Log.d("StockRepository", "股利查詢結果: status=${dividendResponse.status}, data.size=${dividendResponse.data.size}")
+
+            if (dividendResponse.status != 200) {
+                Log.w("StockRepository", "API 回應異常: status=${dividendResponse.status}")
                 return 0
             }
 
+            if (dividendResponse.data.isEmpty()) {
+                Log.w("StockRepository", "未找到股利資料")
+                return 0
+            }
+
+            // 4. API 成功取得資料後，才刪除舊的股利記錄
+            Log.d("StockRepository", "準備刪除 $stockCode 的舊股利記錄...")
+            deleteDividendsByStockCode(stockCode)
+            Log.d("StockRepository", "已清除 $stockCode 的舊股利記錄")
+
+            // 列印第一筆資料來檢查欄位
+            if (dividendResponse.data.isNotEmpty()) {
+                val firstData = dividendResponse.data.first()
+                Log.d("StockRepository", "第一筆股利完整資料: stockId=${firstData.stockId}, date=${firstData.date}, year=${firstData.dividendYear}, cash=${firstData.cashDividend}, stock=${firstData.stockDividend}")
+            }
+
             var insertedCount = 0
+
+            Log.d("StockRepository", "開始處理 ${transactions.size} 筆交易記錄")
 
             // 4. 為每筆符合條件的交易建立股利記錄
             for (transaction in transactions) {
                 val transactionCalendar = java.util.Calendar.getInstance()
                 transactionCalendar.timeInMillis = transaction.transactionDate
+                // 將時間歸零到當天 00:00:00，避免時分秒影響日期比較
+                transactionCalendar.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                transactionCalendar.set(java.util.Calendar.MINUTE, 0)
+                transactionCalendar.set(java.util.Calendar.SECOND, 0)
+                transactionCalendar.set(java.util.Calendar.MILLISECOND, 0)
+                val txDateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(transaction.transactionDate))
 
                 // 取得該交易已有的股利記錄，避免重複新增
                 val existingDividends = getDividendsByTransaction(transaction.id)
                 val existingDividendDates = existingDividends.map { it.exDividendDate }.toSet()
 
+                Log.d("StockRepository", "交易 ${transaction.id} (買入日: $txDateStr, 股數: ${transaction.quantity}, 已有股利: ${existingDividends.size} 筆)")
+                Log.d("StockRepository", "  已存在的除息日期: ${existingDividendDates.map { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(it)) }}")
+
                 for (dividendData in dividendResponse.data) {
-                    // 解析除息日
-                    val exDividendDateStr = dividendData.date
-                    val exDividendCalendar = java.util.Calendar.getInstance()
-                    val dateParts = exDividendDateStr.split("-")
-                    if (dateParts.size != 3) continue
+                    // 先列印原始資料來除錯
+                    Log.d("StockRepository", "  原始股利資料: payDate=${dividendData.date}, cashExDate=${dividendData.cashExDividendDate}, stockExDate=${dividendData.stockExDividendDate}, cash=${dividendData.cashDividend}, stock=${dividendData.stockDividend}")
 
-                    exDividendCalendar.set(
-                        dateParts[0].toInt(),
-                        dateParts[1].toInt() - 1,
-                        dateParts[2].toInt()
-                    )
+                    val cashDividend = dividendData.cashDividend ?: 0.0
+                    val stockDividend = dividendData.stockDividend ?: 0.0
+                    val dividendYear = dividendData.dividendYear ?: ""
 
-                    // 判斷：買入日期必須在除息日之前
-                    if (transactionCalendar.timeInMillis < exDividendCalendar.timeInMillis) {
-                        // 檢查是否已經有這個日期的股利記錄
-                        if (exDividendCalendar.timeInMillis in existingDividendDates) {
-                            continue
+                    // 處理現金股利
+                    if (cashDividend > 0 && !dividendData.cashExDividendDate.isNullOrEmpty()) {
+                        val exDividendDateStr = dividendData.cashExDividendDate
+                        val exDividendCalendar = java.util.Calendar.getInstance()
+                        val dateParts = exDividendDateStr.split("-")
+                        if (dateParts.size != 3) continue
+
+                        exDividendCalendar.set(
+                            dateParts[0].toInt(),
+                            dateParts[1].toInt() - 1,
+                            dateParts[2].toInt(),
+                            0, 0, 0  // 時、分、秒都設為 0
+                        )
+                        exDividendCalendar.set(java.util.Calendar.MILLISECOND, 0)
+
+                        // 判斷：買入日期必須在除息交易日之前（同一天不算）
+                        if (transactionCalendar.timeInMillis < exDividendCalendar.timeInMillis) {
+                            // 檢查是否已經有這個日期的股利記錄
+                            if (exDividendCalendar.timeInMillis in existingDividendDates) {
+                                Log.d("StockRepository", "  現金股利 $exDividendDateStr 已存在，跳過")
+                                continue
+                            }
+
+                            Log.d("StockRepository", "  現金股利 $exDividendDateStr: 每股=$cashDividend, 股數=${transaction.quantity}, 總額=${cashDividend * transaction.quantity}")
+
+                            val dividend = com.example.stonkseveryday.data.model.Dividend(
+                                transactionId = transaction.id,
+                                stockCode = stockCode,
+                                dividendType = com.example.stonkseveryday.data.model.DividendType.CASH,
+                                exDividendDate = exDividendCalendar.timeInMillis,
+                                dividendPerShare = cashDividend,
+                                quantity = transaction.quantity,
+                                dividendAmount = cashDividend * transaction.quantity,
+                                note = if (dividendYear.isNotEmpty()) "${dividendYear}年度現金股利" else "現金股利"
+                            )
+                            insertDividend(dividend)
+                            Log.i("StockRepository", "  ✓ 新增現金股利: $exDividendDateStr")
+                            insertedCount++
                         }
+                    }
 
-                        // 計算股利金額
-                        val cashDividend = dividendData.cashDividend ?: 0.0
-                        val stockDividend = dividendData.stockDividend ?: 0.0
-                        val dividendYear = dividendData.dividendYear ?: ""
+                    // 處理股票股利
+                    if (stockDividend > 0 && !dividendData.stockExDividendDate.isNullOrEmpty()) {
+                        val exDividendDateStr = dividendData.stockExDividendDate
+                        val exDividendCalendar = java.util.Calendar.getInstance()
+                        val dateParts = exDividendDateStr.split("-")
+                        if (dateParts.size != 3) continue
 
-                        // 只有當有現金股利或股票股利時才新增記錄
-                        if (cashDividend > 0 || stockDividend > 0) {
-                            // 現金股利
-                            if (cashDividend > 0) {
-                                val dividend = com.example.stonkseveryday.data.model.Dividend(
-                                    transactionId = transaction.id,
-                                    stockCode = stockCode,
-                                    dividendType = com.example.stonkseveryday.data.model.DividendType.CASH,
-                                    exDividendDate = exDividendCalendar.timeInMillis,
-                                    dividendPerShare = cashDividend,
-                                    quantity = transaction.quantity,
-                                    dividendAmount = cashDividend * transaction.quantity,
-                                    note = if (dividendYear.isNotEmpty()) "${dividendYear}年度現金股利" else "現金股利"
-                                )
-                                insertDividend(dividend)
-                                insertedCount++
+                        exDividendCalendar.set(
+                            dateParts[0].toInt(),
+                            dateParts[1].toInt() - 1,
+                            dateParts[2].toInt(),
+                            0, 0, 0  // 時、分、秒都設為 0
+                        )
+                        exDividendCalendar.set(java.util.Calendar.MILLISECOND, 0)
+
+                        // 判斷：買入日期必須在除權交易日之前（同一天不算）
+                        if (transactionCalendar.timeInMillis < exDividendCalendar.timeInMillis) {
+                            // 檢查是否已經有這個日期的股利記錄
+                            if (exDividendCalendar.timeInMillis in existingDividendDates) {
+                                Log.d("StockRepository", "  股票股利 $exDividendDateStr 已存在，跳過")
+                                continue
                             }
 
-                            // 股票股利
-                            if (stockDividend > 0) {
-                                val dividend = com.example.stonkseveryday.data.model.Dividend(
-                                    transactionId = transaction.id,
-                                    stockCode = stockCode,
-                                    dividendType = com.example.stonkseveryday.data.model.DividendType.STOCK,
-                                    exDividendDate = exDividendCalendar.timeInMillis,
-                                    dividendPerShare = stockDividend,
-                                    quantity = transaction.quantity,
-                                    dividendAmount = 0.0,
-                                    note = if (dividendYear.isNotEmpty()) "${dividendYear}年度股票股利 (配${stockDividend}股)" else "股票股利 (配${stockDividend}股)"
-                                )
-                                insertDividend(dividend)
-                                insertedCount++
-                            }
+                            Log.d("StockRepository", "  股票股利 $exDividendDateStr: 每股配${stockDividend}股")
+
+                            val dividend = com.example.stonkseveryday.data.model.Dividend(
+                                transactionId = transaction.id,
+                                stockCode = stockCode,
+                                dividendType = com.example.stonkseveryday.data.model.DividendType.STOCK,
+                                exDividendDate = exDividendCalendar.timeInMillis,
+                                dividendPerShare = stockDividend,
+                                quantity = transaction.quantity,
+                                dividendAmount = 0.0,
+                                note = if (dividendYear.isNotEmpty()) "${dividendYear}年度股票股利 (配${stockDividend}股)" else "股票股利 (配${stockDividend}股)"
+                            )
+                            insertDividend(dividend)
+                            Log.i("StockRepository", "  ✓ 新增股票股利: $exDividendDateStr")
+                            insertedCount++
                         }
                     }
                 }
             }
 
+            Log.i("StockRepository", "股利計算完成，共新增 $insertedCount 筆記錄")
+
+            // Debug: 列印所有交易的最終股利統計
+            for (transaction in transactions) {
+                val finalDividends = getDividendsByTransaction(transaction.id)
+                val finalTotal = finalDividends.sumOf { it.dividendAmount }
+                Log.i("StockRepository", "【最終統計】交易ID=${transaction.id}, 股利記錄數=${finalDividends.size}, 累積股利=$finalTotal")
+            }
+
+            // 記錄計算時間
+            val record = com.example.stonkseveryday.data.model.DividendCalculationRecord(
+                stockCode = stockCode,
+                lastCalculationTime = System.currentTimeMillis(),
+                recordCount = insertedCount
+            )
+            dividendCalculationRecordDao.insertOrUpdate(record)
+            Log.d("StockRepository", "已記錄 $stockCode 的股利計算時間")
+
             return insertedCount
+        } catch (e: java.net.UnknownHostException) {
+            Log.e("StockRepository", "網路連線失敗", e)
+            throw e  // 讓 ViewModel 處理
+        } catch (e: java.net.SocketTimeoutException) {
+            Log.e("StockRepository", "連線逾時", e)
+            throw e  // 讓 ViewModel 處理
         } catch (e: Exception) {
+            Log.e("StockRepository", "計算股利時發生錯誤: ${e.javaClass.simpleName} - ${e.message}", e)
             e.printStackTrace()
-            return 0
+            throw e  // 讓 ViewModel 處理
         }
+    }
+
+    /**
+     * 檢查股票是否需要更新股利
+     * @param stockCode 股票代碼
+     * @return true 表示需要更新（超過 1 天沒更新或從未計算過）
+     */
+    suspend fun shouldUpdateDividends(stockCode: String): Boolean {
+        val record = dividendCalculationRecordDao.getRecord(stockCode)
+        if (record == null) {
+            Log.d("StockRepository", "$stockCode 從未計算過股利，需要更新")
+            return true
+        }
+
+        val daysSinceLastCalculation = (System.currentTimeMillis() - record.lastCalculationTime) / (1000 * 60 * 60 * 24)
+        val shouldUpdate = daysSinceLastCalculation >= 1
+        Log.d("StockRepository", "$stockCode 距上次計算 $daysSinceLastCalculation 天，${if (shouldUpdate) "需要" else "不需要"}更新")
+        return shouldUpdate
+    }
+
+    /**
+     * 更新所有過期的股利資料
+     * 在 app 啟動時呼叫
+     */
+    suspend fun updateStaleDividends(token: String = ""): Int {
+        Log.i("StockRepository", "開始檢查並更新過期的股利資料")
+
+        // 取得所有不重複的股票代碼
+        val stockCodes = allTransactions.first()
+            .map { it.stockCode }
+            .distinct()
+
+        var totalUpdated = 0
+        for (stockCode in stockCodes) {
+            if (shouldUpdateDividends(stockCode)) {
+                val count = calculateAndInsertDividends(stockCode, token)
+                if (count > 0) {
+                    totalUpdated++
+                }
+            }
+        }
+
+        Log.i("StockRepository", "股利更新完成，共更新 $totalUpdated 支股票")
+        return totalUpdated
     }
 }

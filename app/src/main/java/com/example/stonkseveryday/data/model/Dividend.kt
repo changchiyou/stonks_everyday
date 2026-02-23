@@ -19,7 +19,10 @@ import java.util.Date
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index(value = ["transactionId"])]
+    indices = [
+        Index(value = ["transactionId"]),
+        Index(value = ["transactionId", "exDividendDate", "dividendType"], unique = true)
+    ]
 )
 data class Dividend(
     @PrimaryKey(autoGenerate = true)

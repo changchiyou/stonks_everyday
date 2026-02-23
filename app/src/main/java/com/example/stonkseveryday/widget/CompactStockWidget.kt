@@ -34,12 +34,18 @@ class CompactStockWidget : GlanceAppWidget() {
             }
         }
 
+        // 讀取或儲存最後刷新時間（與一般版本共用）
+        val prefs = context.getSharedPreferences("widget_prefs", android.content.Context.MODE_PRIVATE)
+        val lastRefreshTime = prefs.getLong("last_refresh_time", System.currentTimeMillis())
+        prefs.edit().putLong("last_refresh_time", System.currentTimeMillis()).apply()
+
         provideContent {
             // 使用 WidgetContent，但傳入 isCompact = true
             WidgetContent(
                 dailyProfitLoss = dailyProfitLoss,
                 totalProfitLoss = 0.0,  // 不顯示
                 totalAssets = 0.0,       // 不顯示
+                lastRefreshTime = lastRefreshTime,
                 isCompact = true
             )
         }
@@ -61,6 +67,7 @@ fun CompactStockWidgetPreview() {
         dailyProfitLoss = 1250.0,
         totalProfitLoss = 0.0,
         totalAssets = 0.0,
+        lastRefreshTime = System.currentTimeMillis() - 180000, // 3 分鐘前
         isCompact = true
     )
 }
@@ -76,6 +83,7 @@ fun CompactStockWidgetNegativePreview() {
         dailyProfitLoss = -3500.0,
         totalProfitLoss = 0.0,
         totalAssets = 0.0,
+        lastRefreshTime = System.currentTimeMillis() - 7200000, // 2 小時前
         isCompact = true
     )
 }

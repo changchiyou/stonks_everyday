@@ -29,16 +29,17 @@ fun AddTransactionScreen(
     onFetchStockInfo: suspend (String) -> com.example.stonkseveryday.data.api.StockInfoResponse? = { null },
     defaultFeeRate: Double = 0.1425,
     defaultStockTaxRate: Double = 0.3,
-    defaultEtfTaxRate: Double = 0.1
+    defaultEtfTaxRate: Double = 0.1,
+    editingTransaction: StockTransaction? = null
 ) {
-    var stockCode by remember { mutableStateOf("") }
-    var stockName by remember { mutableStateOf("") }
-    var transactionType by remember { mutableStateOf(TransactionType.BUY) }
-    var quantity by remember { mutableStateOf("") }
-    var pricePerShare by remember { mutableStateOf("") }
-    var fee by remember { mutableStateOf("") }
-    var tax by remember { mutableStateOf("") }
-    var isEtf by remember { mutableStateOf(false) }
+    var stockCode by remember { mutableStateOf(editingTransaction?.stockCode ?: "") }
+    var stockName by remember { mutableStateOf(editingTransaction?.stockName ?: "") }
+    var transactionType by remember { mutableStateOf(editingTransaction?.transactionType ?: TransactionType.BUY) }
+    var quantity by remember { mutableStateOf(editingTransaction?.quantity?.toString() ?: "") }
+    var pricePerShare by remember { mutableStateOf(editingTransaction?.pricePerShare?.toString() ?: "") }
+    var fee by remember { mutableStateOf(editingTransaction?.fee?.toString() ?: "") }
+    var tax by remember { mutableStateOf(editingTransaction?.tax?.toString() ?: "") }
+    var isEtf by remember { mutableStateOf(editingTransaction?.isEtf ?: false) }
 
     // 客製化費率
     var customFeeRate by remember { mutableStateOf("") }
@@ -46,7 +47,7 @@ fun AddTransactionScreen(
     var useCustomRates by remember { mutableStateOf(false) }
 
     // 交易日期時間
-    var selectedDateMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var selectedDateMillis by remember { mutableLongStateOf(editingTransaction?.transactionDate ?: System.currentTimeMillis()) }
     var showDatePicker by remember { mutableStateOf(false) }
 
     var showError by remember { mutableStateOf(false) }
@@ -91,7 +92,7 @@ fun AddTransactionScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("新增交易") },
+                title = { Text(if (editingTransaction != null) "編輯交易" else "新增交易") },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "返回")
@@ -368,6 +369,7 @@ fun AddTransactionScreen(
                         }
                         else -> {
                             val transaction = StockTransaction(
+                                id = editingTransaction?.id ?: 0,
                                 stockCode = stockCode,
                                 stockName = stockName,
                                 transactionType = transactionType,

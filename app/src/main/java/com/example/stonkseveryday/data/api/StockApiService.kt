@@ -15,6 +15,7 @@ interface StockApiService {
         @Query("dataset") dataset: String = "TaiwanStockPrice",
         @Query("data_id") stockCode: String,
         @Query("start_date") startDate: String = "",
+        @Query("end_date") endDate: String = "",
         @Query("token") token: String = ""
     ): FinMindResponse
 
@@ -105,7 +106,8 @@ data class StockPriceResponse(
     val previousClose: Double,
     val change: Double,
     val changePercent: Double,
-    val timestamp: Long
+    val timestamp: Long,
+    val isStale: Boolean = false  // 資料是否過期（來自快取且超過24小時）
 )
 
 // 股票基本資訊回應
@@ -131,11 +133,15 @@ data class TaiwanStockDividendData(
     @SerializedName("stock_id")
     val stockId: String,
     @SerializedName("date")
-    val date: String,  // 除息日/除權日
-    @SerializedName("dividend_year")
+    val date: String,  // 發放日
+    @SerializedName("CashExDividendTradingDate")
+    val cashExDividendDate: String? = "",  // 現金股利除息交易日
+    @SerializedName("StockExDividendTradingDate")
+    val stockExDividendDate: String? = "",  // 股票股利除權交易日
+    @SerializedName("year")
     val dividendYear: String? = "",
-    @SerializedName("cash_dividend")
+    @SerializedName("CashEarningsDistribution")
     val cashDividend: Double? = 0.0,  // 現金股利
-    @SerializedName("stock_dividend")
+    @SerializedName("StockEarningsDistribution")
     val stockDividend: Double? = 0.0  // 股票股利
 )
