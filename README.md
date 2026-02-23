@@ -23,27 +23,3 @@ Android application targeting Android 16 (API 36).
 ```bash
 ./gradlew installDebug
 ```
-
-## 專案結構
-
-```
-stonks_everyday/
-├── app/
-│   ├── src/
-│   │   └── main/
-│   │       ├── java/com/example/stonkseveryday/
-│   │       │   └── MainActivity.kt
-│   │       ├── res/
-│   │       │   ├── layout/
-│   │       │   ├── values/
-│   │       │   └── mipmap-*/
-│   │       └── AndroidManifest.xml
-│   └── build.gradle
-├── gradle/
-├── build.gradle
-└── settings.gradle
-```
-
-## 備註
-
-啟動器圖標文件 (ic_launcher*.png) 是佔位符，請使用 Android Studio 的 Image Asset Studio 或其他工具生成正確的圖標。
