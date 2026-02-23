@@ -180,7 +180,9 @@ fun AddTransactionScreen(
                     stockCode = upperCode
 
                     // 當輸入完整股票代碼時自動查詢股票名稱和是否為 ETF
-                    if (upperCode.length == 4 && upperCode.all { it.isDigit() }) {
+                    // 台股代碼格式: 4碼(一般股票)、5碼(興櫃)、6碼(ETF等)
+                    // 支援純數字(2330)或含英文字母(00631L)的代碼
+                    if (upperCode.length in 4..6 && upperCode.all { it.isLetterOrDigit() }) {
                         scope.launch {
                             isFetchingStockName = true
                             val stockInfo = onFetchStockInfo(upperCode)

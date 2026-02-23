@@ -575,23 +575,48 @@ fun HoldingItem(
             }
 
             // 第四行：累積股利（永遠顯示，但開關控制是否納入損益計算）
-            if (holding.totalDividends > 0) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Start
-                ) {
-                    Column {
-                        Text(
-                            text = "累積股利",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                        )
-                        Text(
-                            text = formatCurrency(holding.totalDividends),
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.error  // 股利收入：紅色（台股習慣）
-                        )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Start
+            ) {
+                Column {
+                    Text(
+                        text = "累積股利",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    // 根據查詢狀態顯示不同內容
+                    when (holding.dividendQueryStatus) {
+                        com.example.stonkseveryday.data.model.DividendQueryStatus.NOT_FOUND -> {
+                            // FinMind 查不到該股票：顯示「查無資料」(灰色)
+                            Text(
+                                text = "查無資料",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        com.example.stonkseveryday.data.model.DividendQueryStatus.API_ERROR -> {
+                            // API 錯誤：顯示「查詢錯誤」(紅色警告)
+                            Text(
+                                text = "查詢錯誤",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        else -> {
+                            // 查詢成功：顯示金額（可能是 $0）
+                            Text(
+                                text = formatCurrency(holding.totalDividends),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = if (holding.totalDividends > 0)
+                                    MaterialTheme.colorScheme.error  // 股利收入：紅色（台股習慣）
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
                     }
                 }
             }

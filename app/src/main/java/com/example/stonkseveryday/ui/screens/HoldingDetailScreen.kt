@@ -250,15 +250,38 @@ fun HoldingSummaryCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                     )
-                    Text(
-                        text = currencyFormat.format(holding.totalDividends),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = if (holding.totalDividends > 0)
-                            MaterialTheme.colorScheme.error  // 股利收入：紅色（台股習慣）
-                        else
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
+                    // 根據股利查詢狀態顯示不同內容
+                    when (holding.dividendQueryStatus) {
+                        com.example.stonkseveryday.data.model.DividendQueryStatus.NOT_FOUND -> {
+                            // FinMind 查不到該股票
+                            Text(
+                                text = "查無資料",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        com.example.stonkseveryday.data.model.DividendQueryStatus.API_ERROR -> {
+                            // API 錯誤
+                            Text(
+                                text = "查詢錯誤",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        else -> {
+                            Text(
+                                text = currencyFormat.format(holding.totalDividends),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (holding.totalDividends > 0)
+                                    MaterialTheme.colorScheme.error  // 股利收入：紅色（台股習慣）
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
                 }
 
                 Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {

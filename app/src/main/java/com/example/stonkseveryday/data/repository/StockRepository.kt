@@ -450,6 +450,15 @@ class StockRepository(
                         0.0
                     }
 
+                    // 獲取股利查詢狀態
+                    val dividendQueryStatus = try {
+                        dividendCalculationRecordDao.getRecord(code)?.queryStatus
+                            ?: com.example.stonkseveryday.data.model.DividendQueryStatus.SUCCESS
+                    } catch (e: Exception) {
+                        Log.e("StockRepository", "Failed to fetch dividend query status for $code", e)
+                        com.example.stonkseveryday.data.model.DividendQueryStatus.SUCCESS
+                    }
+
                     // API 成功時使用即時股價，失敗時使用成本價（讓使用者至少能看到持股）
                     val currentPrice = stockPrice?.currentPrice ?: averageCost
                     val previousClose = stockPrice?.previousClose ?: averageCost
@@ -498,7 +507,8 @@ class StockRepository(
                             totalDividends = totalDividends,
                             isPriceStale = stockPrice?.isStale ?: (stockPrice == null),  // API 失敗或使用過期快取
                             adjustedCost = adjustedCostBasis,
-                            isZeroCost = isZeroCost
+                            isZeroCost = isZeroCost,
+                            dividendQueryStatus = dividendQueryStatus
                         )
 
                         HoldingWithPrice(holding, previousClose)
@@ -623,13 +633,50 @@ class StockRepository(
 
             Log.d("StockRepository", "股利查詢結果: status=${dividendResponse.status}, data.size=${dividendResponse.data.size}")
 
-            if (dividendResponse.status != 200) {
-                Log.w("StockRepository", "API 回應異常: status=${dividendResponse.status}")
+            // 判斷查詢狀態
+            val queryStatus = when {
+                dividendResponse.status != 200 -> {
+                    Log.w("StockRepository", "API 回應異常: status=${dividendResponse.status}")
+                    com.example.stonkseveryday.data.model.DividendQueryStatus.API_ERROR
+                }
+                dividendResponse.data.isEmpty() -> {
+                    // 可能是「該股票從未配息」或「FinMind 查不到該股票」
+                    // 檢查 message 來判斷
+                    if (dividendResponse.message.contains("stock not found", ignoreCase = true) ||
+                        dividendResponse.message.contains("查無此股票", ignoreCase = true)) {
+                        Log.w("StockRepository", "FinMind 查不到該股票: $stockCode")
+                        com.example.stonkseveryday.data.model.DividendQueryStatus.NOT_FOUND
+                    } else {
+                        Log.w("StockRepository", "該股票歷年無股利資料")
+                        com.example.stonkseveryday.data.model.DividendQueryStatus.SUCCESS
+                    }
+                }
+                else -> com.example.stonkseveryday.data.model.DividendQueryStatus.SUCCESS
+            }
+
+            // 如果是 API 錯誤或查不到股票，記錄狀態後返回 0
+            if (queryStatus != com.example.stonkseveryday.data.model.DividendQueryStatus.SUCCESS) {
+                val record = com.example.stonkseveryday.data.model.DividendCalculationRecord(
+                    stockCode = stockCode,
+                    lastCalculationTime = System.currentTimeMillis(),
+                    recordCount = 0,
+                    queryStatus = queryStatus
+                )
+                dividendCalculationRecordDao.insertOrUpdate(record)
+                Log.d("StockRepository", "已記錄 $stockCode 的查詢狀態: $queryStatus")
                 return 0
             }
 
+            // data 為空但查詢成功，表示該股票歷年無股利
             if (dividendResponse.data.isEmpty()) {
-                Log.w("StockRepository", "未找到股利資料")
+                val record = com.example.stonkseveryday.data.model.DividendCalculationRecord(
+                    stockCode = stockCode,
+                    lastCalculationTime = System.currentTimeMillis(),
+                    recordCount = 0,
+                    queryStatus = com.example.stonkseveryday.data.model.DividendQueryStatus.SUCCESS
+                )
+                dividendCalculationRecordDao.insertOrUpdate(record)
+                Log.d("StockRepository", "已記錄 $stockCode 無股利資料")
                 return 0
             }
 
@@ -767,11 +814,12 @@ class StockRepository(
                 Log.i("StockRepository", "【最終統計】交易ID=${transaction.id}, 股利記錄數=${finalDividends.size}, 累積股利=$finalTotal")
             }
 
-            // 記錄計算時間
+            // 記錄計算時間（成功）
             val record = com.example.stonkseveryday.data.model.DividendCalculationRecord(
                 stockCode = stockCode,
                 lastCalculationTime = System.currentTimeMillis(),
-                recordCount = insertedCount
+                recordCount = insertedCount,
+                queryStatus = com.example.stonkseveryday.data.model.DividendQueryStatus.SUCCESS
             )
             dividendCalculationRecordDao.insertOrUpdate(record)
             Log.d("StockRepository", "已記錄 $stockCode 的股利計算時間")
@@ -793,7 +841,7 @@ class StockRepository(
     /**
      * 檢查股票是否需要更新股利
      * @param stockCode 股票代碼
-     * @return true 表示需要更新（超過 1 天沒更新或從未計算過）
+     * @return true 表示需要更新（超過 1 天沒更新、從未計算過、或上次 API 錯誤）
      */
     suspend fun shouldUpdateDividends(stockCode: String): Boolean {
         val record = dividendCalculationRecordDao.getRecord(stockCode)
@@ -802,9 +850,16 @@ class StockRepository(
             return true
         }
 
+        // 如果上次查詢是 API_ERROR，立即重試（每次 app 啟動或刷新都會重試）
+        if (record.queryStatus == com.example.stonkseveryday.data.model.DividendQueryStatus.API_ERROR) {
+            Log.d("StockRepository", "$stockCode 上次查詢發生錯誤，需要重試")
+            return true
+        }
+
+        // 其他情況（SUCCESS 或 NOT_FOUND）檢查時間，每天更新一次
         val daysSinceLastCalculation = (System.currentTimeMillis() - record.lastCalculationTime) / (1000 * 60 * 60 * 24)
         val shouldUpdate = daysSinceLastCalculation >= 1
-        Log.d("StockRepository", "$stockCode 距上次計算 $daysSinceLastCalculation 天，${if (shouldUpdate) "需要" else "不需要"}更新")
+        Log.d("StockRepository", "$stockCode 距上次計算 $daysSinceLastCalculation 天，查詢狀態=${record.queryStatus}，${if (shouldUpdate) "需要" else "不需要"}更新")
         return shouldUpdate
     }
 
