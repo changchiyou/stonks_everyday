@@ -239,7 +239,7 @@ fun SummaryCard(summary: StockSummary) {
 
                 Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
                     Text(
-                        text = "今日損益",
+                        text = "總今日損益",
                         style = if (isSmallScreen) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                     )
@@ -462,16 +462,23 @@ fun HoldingItem(
                 val previousClose = holding.currentPrice / (1 + holding.todayChangePercent / 100)
                 val todayProfitLoss = (holding.currentPrice - previousClose) * holding.quantity
 
-                Text(
-                    text = "${if (todayProfitLoss >= 0) "+" else ""}${formatCurrency(todayProfitLoss)}",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = when {
-                        todayProfitLoss > 0 -> MaterialTheme.colorScheme.error  // 上漲：紅色
-                        todayProfitLoss < 0 -> MaterialTheme.colorScheme.tertiary  // 下跌：綠色
-                        else -> MaterialTheme.colorScheme.onSurface  // 平盤：黑色
-                    }
-                )
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "今日損益",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "${if (todayProfitLoss >= 0) "+" else ""}${formatCurrency(todayProfitLoss)}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = when {
+                            todayProfitLoss > 0 -> MaterialTheme.colorScheme.error  // 上漲：紅色
+                            todayProfitLoss < 0 -> MaterialTheme.colorScheme.tertiary  // 下跌：綠色
+                            else -> MaterialTheme.colorScheme.onSurface  // 平盤：黑色
+                        }
+                    )
+                }
             }
 
             HorizontalDivider()

@@ -19,6 +19,10 @@ import kotlinx.coroutines.flow.first
  */
 class CompactStockWidget : GlanceAppWidget() {
 
+    companion object {
+        private const val AUTO_REFRESH_INTERVAL = 10 * 60 * 1000L // 10 分鐘
+    }
+
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         // 先檢查 widget 是否仍然存在（提前過濾無效的 widget ID）
         try {
@@ -40,10 +44,31 @@ class CompactStockWidget : GlanceAppWidget() {
             throw e
         }
 
+        // 檢查是否需要自動刷新（小工具顯示時）
+        val prefs = context.getSharedPreferences("widget_prefs", Context.MODE_PRIVATE)
+        val lastRefreshTime = prefs.getLong("last_refresh_time", 0L)
+        val now = System.currentTimeMillis()
+        val timeSinceLastRefresh = now - lastRefreshTime
+
+        if (lastRefreshTime > 0 && timeSinceLastRefresh >= AUTO_REFRESH_INTERVAL) {
+            android.util.Log.i(
+                "CompactStockWidget",
+                "自動刷新觸發：距上次刷新 ${timeSinceLastRefresh / 1000 / 60} 分鐘"
+            )
+            // 使用 WorkManager 啟動背景刷新任務（避免阻塞 UI）
+            val workRequest = androidx.work.OneTimeWorkRequestBuilder<AutoRefreshWorker>()
+                .build()
+            androidx.work.WorkManager.getInstance(context).enqueue(workRequest)
+        }
+
         // Widget 存在，嘗試更新
         try {
             // 使用快取避免多個小工具同時計算
             val data = WidgetDataCache.getData(context, forceRefresh = false)
+
+            // 每次都從 SharedPreferences 讀取最新的刷新時間（不快取）
+            val prefs = context.getSharedPreferences("widget_prefs", Context.MODE_PRIVATE)
+            val lastRefreshTime = prefs.getLong("last_refresh_time", System.currentTimeMillis())
 
             provideContent {
                 // 使用 WidgetContent，但傳入 isCompact = true
@@ -51,7 +76,7 @@ class CompactStockWidget : GlanceAppWidget() {
                     dailyProfitLoss = data.dailyProfitLoss,
                     totalProfitLoss = 0.0,  // 不顯示
                     totalAssets = 0.0,       // 不顯示
-                    lastRefreshTime = data.lastRefreshTime,
+                    lastRefreshTime = lastRefreshTime,
                     isCompact = true
                 )
             }

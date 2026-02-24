@@ -18,7 +18,7 @@ import com.example.stonkseveryday.data.model.StockTransaction
         DividendCalculationRecord::class,
         com.example.stonkseveryday.data.model.StockPriceCache::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -184,6 +184,20 @@ abstract class StockDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // 在 stock_price_cache 表中新增日期追蹤欄位
+                // previousCloseDate: previousClose 對應的日期
+                // currentPriceDate: currentPrice 對應的日期
+                database.execSQL(
+                    "ALTER TABLE stock_price_cache ADD COLUMN previousCloseDate TEXT DEFAULT NULL"
+                )
+                database.execSQL(
+                    "ALTER TABLE stock_price_cache ADD COLUMN currentPriceDate TEXT DEFAULT NULL"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): StockDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -191,7 +205,7 @@ abstract class StockDatabase : RoomDatabase() {
                     StockDatabase::class.java,
                     "stock_database"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
                     .build()
                 INSTANCE = instance
                 instance

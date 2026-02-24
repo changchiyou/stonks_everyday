@@ -20,8 +20,7 @@ object WidgetDataCache {
     data class WidgetData(
         val dailyProfitLoss: Double,
         val totalProfitLoss: Double,
-        val totalAssets: Double,
-        val lastRefreshTime: Long
+        val totalAssets: Double
     )
 
     /**
@@ -34,20 +33,119 @@ object WidgetDataCache {
 
             // 如果 5 秒內有快取且不強制刷新，直接返回
             if (!forceRefresh && cachedData != null && (now - lastCalculateTime) < cacheDuration) {
-                android.util.Log.d("WidgetDataCache", "使用快取資料（${(now - lastCalculateTime)}ms 前）")
+                android.util.Log.d("WidgetDataCache", "✓ 使用快取資料（${(now - lastCalculateTime)}ms 前）")
                 return cachedData!!
             }
 
             // 重新計算
-            android.util.Log.d("WidgetDataCache", "重新計算小工具資料（forceRefresh=$forceRefresh）")
+            val reason = if (forceRefresh) "強制刷新" else "快取過期"
+            android.util.Log.i("WidgetDataCache", "開始重新計算小工具資料（原因: $reason）")
             val startTime = System.currentTimeMillis()
             val newData = calculateWidgetData(context)
             val duration = System.currentTimeMillis() - startTime
-            android.util.Log.d("WidgetDataCache", "計算完成，耗時 ${duration}ms，今日損益=${newData.dailyProfitLoss}, 總損益=${newData.totalProfitLoss}, 總資產=${newData.totalAssets}")
+            android.util.Log.i(
+                "WidgetDataCache",
+                "✓ 計算完成，耗時 ${duration}ms\n" +
+                "  - 今日損益: ${String.format("%.2f", newData.dailyProfitLoss)}\n" +
+                "  - 總損益: ${String.format("%.2f", newData.totalProfitLoss)}\n" +
+                "  - 總資產: ${String.format("%.2f", newData.totalAssets)}"
+            )
             cachedData = newData
             lastCalculateTime = now
             return newData
         }
+    }
+
+    /**
+     * 智能計算今日損益
+     * 實作跨日檢測、日期驗證等邏輯
+     *
+     * @param code 股票代碼
+     * @param currentPrice 現價
+     * @param previousClose 昨收價
+     * @param quantity 持股數量
+     * @param cachedPrice 快取的股價資料（包含日期資訊）
+     * @return 今日損益
+     */
+    private fun calculateTodayProfitLoss(
+        code: String,
+        currentPrice: Double,
+        previousClose: Double,
+        quantity: Int,
+        cachedPrice: com.example.stonkseveryday.data.model.StockPriceCache?
+    ): Double {
+        // 如果沒有快取資料，無法判斷，返回簡單計算結果
+        if (cachedPrice == null) {
+            android.util.Log.d("WidgetDataCache", "$code: 無快取資料，使用基本計算")
+            return (currentPrice - previousClose) * quantity
+        }
+
+        // 取得今天的日期（台灣時區）
+        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+        dateFormat.timeZone = java.util.TimeZone.getTimeZone("Asia/Taipei")
+        val today = dateFormat.format(java.util.Date())
+
+        // 檢查 1: previousClose 和 currentPrice 的日期
+        if (cachedPrice.previousCloseDate != null && cachedPrice.currentPriceDate != null) {
+            // 異常情況：previousClose 和 currentPrice 是同一天
+            if (cachedPrice.previousCloseDate == cachedPrice.currentPriceDate) {
+                android.util.Log.w(
+                    "WidgetDataCache",
+                    "$code: previousClose 和 currentPrice 同日 (${cachedPrice.currentPriceDate})，今日損益設為 0"
+                )
+                return 0.0
+            }
+
+            // 檢查 2: 跨日檢測 - currentPrice 不是今天的資料
+            if (cachedPrice.currentPriceDate != today) {
+                android.util.Log.w(
+                    "WidgetDataCache",
+                    "$code: currentPrice 不是今天的資料 (${cachedPrice.currentPriceDate} vs $today)，今日損益設為 0"
+                )
+                return 0.0
+            }
+
+            // 檢查 3: previousClose 應該是昨天或之前的日期
+            val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Taipei"))
+            calendar.add(java.util.Calendar.DAY_OF_YEAR, -1)
+            val yesterday = dateFormat.format(calendar.time)
+
+            // previousClose 的日期應該在今天之前
+            if (cachedPrice.previousCloseDate >= today) {
+                android.util.Log.w(
+                    "WidgetDataCache",
+                    "$code: previousClose 日期異常 (${cachedPrice.previousCloseDate} >= $today)，今日損益設為 0"
+                )
+                return 0.0
+            }
+        }
+
+        // 檢查 4: 時間戳記檢測 - 資料太舊（超過 24 小時）
+        val ageInHours = (System.currentTimeMillis() - cachedPrice.lastUpdateTime) / (1000 * 60 * 60)
+        if (ageInHours > 24) {
+            android.util.Log.w(
+                "WidgetDataCache",
+                "$code: 快取資料過舊 (${ageInHours}h)，今日損益可能不準確"
+            )
+            // 不返回 0，但記錄警告
+        }
+
+        // 檢查 5: 盤前/收盤後檢測 - 如果現價等於昨收（使用昨收作為現價）
+        if (currentPrice == previousClose) {
+            android.util.Log.d(
+                "WidgetDataCache",
+                "$code: currentPrice == previousClose，可能是盤前或收盤後，今日損益設為 0"
+            )
+            return 0.0
+        }
+
+        // 所有檢查通過，計算今日損益
+        val todayPL = (currentPrice - previousClose) * quantity
+        android.util.Log.d(
+            "WidgetDataCache",
+            "$code: 今日損益計算正常 = ($currentPrice - $previousClose) × $quantity = $todayPL"
+        )
+        return todayPL
     }
 
     /**
@@ -103,8 +201,14 @@ object WidgetDataCache {
                 val currentValue = currentPrice * totalQuantity
                 totalAssets += currentValue
 
-                // 計算今日損益
-                val todayPL = (currentPrice - previousClose) * totalQuantity
+                // 計算今日損益（智能跨日檢測）
+                val todayPL = calculateTodayProfitLoss(
+                    code = code,
+                    currentPrice = currentPrice,
+                    previousClose = previousClose,
+                    quantity = totalQuantity,
+                    cachedPrice = cachedPrice
+                )
                 dailyProfitLoss += todayPL
 
                 val baseProfitLoss = (currentPrice - averageCost) * totalQuantity
@@ -122,15 +226,10 @@ object WidgetDataCache {
             }
         }
 
-        // 讀取最後刷新時間
-        val prefs = context.getSharedPreferences("widget_prefs", Context.MODE_PRIVATE)
-        val lastRefreshTime = prefs.getLong("last_refresh_time", System.currentTimeMillis())
-
         return WidgetData(
             dailyProfitLoss = dailyProfitLoss,
             totalProfitLoss = totalProfitLoss,
-            totalAssets = totalAssets,
-            lastRefreshTime = lastRefreshTime
+            totalAssets = totalAssets
         )
     }
 }

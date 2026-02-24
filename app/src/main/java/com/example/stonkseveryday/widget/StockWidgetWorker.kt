@@ -13,12 +13,27 @@ class StockWidgetWorker(
 
     override suspend fun doWork(): Result {
         return try {
+            android.util.Log.i("StockWidgetWorker", "========== 開始更新小工具 (WorkManager) ==========")
+
             // Update all widget instances (both standard and compact)
-            StockWidget().updateAll(applicationContext)
-            CompactStockWidget().updateAll(applicationContext)
+            try {
+                StockWidget().updateAll(applicationContext)
+                android.util.Log.d("StockWidgetWorker", "✓ 完整小工具更新成功")
+            } catch (e: Exception) {
+                android.util.Log.e("StockWidgetWorker", "✗ 完整小工具更新失敗: ${e.message}", e)
+            }
+
+            try {
+                CompactStockWidget().updateAll(applicationContext)
+                android.util.Log.d("StockWidgetWorker", "✓ 緊湊小工具更新成功")
+            } catch (e: Exception) {
+                android.util.Log.e("StockWidgetWorker", "✗ 緊湊小工具更新失敗: ${e.message}", e)
+            }
+
+            android.util.Log.i("StockWidgetWorker", "========== 小工具更新完成 (WorkManager) ==========")
             Result.success()
         } catch (e: Exception) {
-            android.util.Log.e("StockWidgetWorker", "Failed to update widgets", e)
+            android.util.Log.e("StockWidgetWorker", "========== 小工具更新失敗: ${e.message} ==========", e)
             Result.failure()
         }
     }

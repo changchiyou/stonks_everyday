@@ -193,7 +193,9 @@ class StockRepository(
                         changePercent = cachedPrice.changePercent,
                         timestamp = cachedPrice.lastUpdateTime,
                         isStale = false,
-                        askPrice = cachedPrice.askPrice
+                        askPrice = cachedPrice.askPrice,
+                        previousCloseDate = cachedPrice.previousCloseDate,
+                        currentPriceDate = cachedPrice.currentPriceDate
                     )
                 }
             }
@@ -239,7 +241,9 @@ class StockRepository(
                 changePercent = fallbackCache.changePercent,
                 timestamp = fallbackCache.lastUpdateTime,
                 isStale = true,  // 標記為過期
-                askPrice = fallbackCache.askPrice
+                askPrice = fallbackCache.askPrice,
+                previousCloseDate = fallbackCache.previousCloseDate,
+                currentPriceDate = fallbackCache.currentPriceDate
             )
         }
 
@@ -249,17 +253,56 @@ class StockRepository(
 
     /**
      * 快取股價到資料庫
+     * 智能 fallback：保留舊的 previousClose 如果新的日期不對
      */
     private suspend fun cacheStockPrice(price: StockPriceResponse) {
+        // 取得舊快取以實作智能 fallback
+        val oldCache = stockPriceCacheDao.getPriceCache(price.stockCode)
+
+        // 決定最終的 previousClose 和日期
+        val finalPreviousClose: Double
+        val finalPreviousCloseDate: String?
+
+        if (price.previousCloseDate != null && price.currentPriceDate != null) {
+            // 新 API 資料有日期資訊
+            if (price.previousCloseDate == price.currentPriceDate) {
+                // 檢測到異常：previousClose 和 currentPrice 是同一天
+                // 使用舊快取的 previousClose（如果存在且有效）
+                if (oldCache != null &&
+                    oldCache.previousCloseDate != null &&
+                    oldCache.previousCloseDate != price.currentPriceDate) {
+                    Log.w("StockRepository", "${price.stockCode}: 偵測到 previousClose 和 currentPrice 同日 (${price.currentPriceDate})，保留舊的 previousClose (${oldCache.previousCloseDate})")
+                    finalPreviousClose = oldCache.previousClose
+                    finalPreviousCloseDate = oldCache.previousCloseDate
+                } else {
+                    // 沒有舊快取，使用新資料但記錄警告
+                    Log.w("StockRepository", "${price.stockCode}: previousClose 和 currentPrice 同日，但沒有舊快取可用")
+                    finalPreviousClose = price.previousClose
+                    finalPreviousCloseDate = price.previousCloseDate
+                }
+            } else {
+                // 日期正常，使用新資料
+                finalPreviousClose = price.previousClose
+                finalPreviousCloseDate = price.previousCloseDate
+            }
+        } else {
+            // 新 API 資料沒有日期資訊（FinMind API）
+            // 使用新資料，但保留日期為 null
+            finalPreviousClose = price.previousClose
+            finalPreviousCloseDate = null
+        }
+
         val cache = com.example.stonkseveryday.data.model.StockPriceCache(
             stockCode = price.stockCode,
             currentPrice = price.currentPrice,
-            previousClose = price.previousClose,
+            previousClose = finalPreviousClose,
             change = price.change,
             changePercent = price.changePercent,
             lastUpdateTime = System.currentTimeMillis(),
             isStale = false,
-            askPrice = price.askPrice
+            askPrice = price.askPrice,
+            previousCloseDate = finalPreviousCloseDate,
+            currentPriceDate = price.currentPriceDate
         )
         stockPriceCacheDao.insertOrUpdate(cache)
     }
@@ -321,7 +364,11 @@ class StockRepository(
                 (change / previousClose) * 100
             } else 0.0
 
-            Log.d("StockRepository", "FinMind: current=$currentPrice, previous=$previousClose, date=${latestData.date}")
+            // FinMind 提供日期資訊
+            val currentPriceDate = latestData.date  // 格式已經是 yyyy-MM-dd
+            val previousCloseDate = previousData?.date  // 可能為 null（只有一筆資料時）
+
+            Log.d("StockRepository", "FinMind: current=$currentPrice, previous=$previousClose, currentDate=$currentPriceDate, previousDate=$previousCloseDate")
 
             StockPriceResponse(
                 stockCode = stockCode,
@@ -329,7 +376,9 @@ class StockRepository(
                 previousClose = previousClose,
                 change = change,
                 changePercent = changePercent,
-                timestamp = System.currentTimeMillis()
+                timestamp = System.currentTimeMillis(),
+                previousCloseDate = previousCloseDate,
+                currentPriceDate = currentPriceDate
             )
         } else {
             Log.e("StockRepository", "FinMind API returned no data for $stockCode")
@@ -466,9 +515,30 @@ class StockRepository(
             (change / previousClose) * 100
         } else 0.0
 
+        // 計算日期（使用台灣時區）
+        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+        dateFormat.timeZone = java.util.TimeZone.getTimeZone("Asia/Taipei")
+        val today = dateFormat.format(java.util.Date())
+
+        // 計算昨天的日期
+        val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Taipei"))
+        calendar.add(java.util.Calendar.DAY_OF_YEAR, -1)
+        val yesterday = dateFormat.format(calendar.time)
+
+        // 根據價格來源決定日期
+        val currentPriceDate = today  // 現價一定是今天的
+        val previousCloseDate = if (priceSource == "昨收價") {
+            // 如果現價使用昨收價，表示還沒開盤，previousClose 其實是前天的
+            calendar.add(java.util.Calendar.DAY_OF_YEAR, -1)  // 再往前一天
+            dateFormat.format(calendar.time)
+        } else {
+            // 正常情況，previousClose 是昨天的
+            yesterday
+        }
+
         Log.i(
             "StockRepository",
-            "TWSE: $stockCode = $currentPrice [$priceSource] (昨收:$previousClose, 賣一:${askPrice ?: "N/A"}, 時間:${stockInfo.tradeTime})"
+            "TWSE: $stockCode = $currentPrice [$priceSource] (昨收:$previousClose, 賣一:${askPrice ?: "N/A"}, 時間:${stockInfo.tradeTime}, 現價日期:$currentPriceDate, 昨收日期:$previousCloseDate)"
         )
 
         return StockPriceResponse(
@@ -478,7 +548,9 @@ class StockRepository(
             change = change,
             changePercent = changePercent,
             timestamp = System.currentTimeMillis(),
-            askPrice = askPrice  // 新增賣一價
+            askPrice = askPrice,
+            previousCloseDate = previousCloseDate,
+            currentPriceDate = currentPriceDate
         )
     }
 
@@ -513,6 +585,89 @@ class StockRepository(
         return priceMap
     }
 
+    /**
+     * 智能計算今日損益（與 WidgetDataCache 中的邏輯一致）
+     * 實作跨日檢測、日期驗證等邏輯
+     *
+     * @param code 股票代碼
+     * @param currentPrice 現價
+     * @param previousClose 昨收價
+     * @param quantity 持股數量
+     * @param priceResponse 完整的價格回應（包含日期資訊）
+     * @return 今日損益
+     */
+    private fun calculateTodayProfitLossForHolding(
+        code: String,
+        currentPrice: Double,
+        previousClose: Double,
+        quantity: Int,
+        priceResponse: StockPriceResponse?
+    ): Double {
+        // 如果沒有價格回應資料，無法判斷，返回簡單計算結果
+        if (priceResponse == null) {
+            Log.d("StockRepository", "$code: 無價格回應資料，使用基本計算")
+            return (currentPrice - previousClose) * quantity
+        }
+
+        // 取得今天的日期（台灣時區）
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        dateFormat.timeZone = java.util.TimeZone.getTimeZone("Asia/Taipei")
+        val today = dateFormat.format(java.util.Date())
+
+        // 檢查 1: previousClose 和 currentPrice 的日期
+        if (priceResponse.previousCloseDate != null && priceResponse.currentPriceDate != null) {
+            // 異常情況：previousClose 和 currentPrice 是同一天
+            if (priceResponse.previousCloseDate == priceResponse.currentPriceDate) {
+                Log.w(
+                    "StockRepository",
+                    "$code: previousClose 和 currentPrice 同日 (${priceResponse.currentPriceDate})，今日損益設為 0"
+                )
+                return 0.0
+            }
+
+            // 檢查 2: 跨日檢測 - currentPrice 不是今天的資料
+            if (priceResponse.currentPriceDate != today) {
+                Log.w(
+                    "StockRepository",
+                    "$code: currentPrice 不是今天的資料 (${priceResponse.currentPriceDate} vs $today)，今日損益設為 0"
+                )
+                return 0.0
+            }
+
+            // 檢查 3: previousClose 應該是昨天或之前的日期
+            if (priceResponse.previousCloseDate >= today) {
+                Log.w(
+                    "StockRepository",
+                    "$code: previousClose 日期異常 (${priceResponse.previousCloseDate} >= $today)，今日損益設為 0"
+                )
+                return 0.0
+            }
+        }
+
+        // 檢查 4: 資料過期檢測
+        if (priceResponse.isStale) {
+            Log.w("StockRepository", "$code: 使用過期快取資料，今日損益可能不準確")
+            // 不返回 0，但記錄警告
+        }
+
+        // 檢查 5: 盤前/收盤後檢測 - 如果現價等於昨收（使用昨收作為現價）
+        if (currentPrice == previousClose) {
+            Log.d(
+                "StockRepository",
+                "$code: currentPrice == previousClose，可能是盤前或收盤後，今日損益設為 0"
+            )
+            return 0.0
+        }
+
+        // 所有檢查通過，計算今日損益
+        val todayPL = (currentPrice - previousClose) * quantity
+        Log.d(
+            "StockRepository",
+            "$code: 今日損益計算正常 = ($currentPrice - $previousClose) × $quantity = $todayPL"
+        )
+        return todayPL
+    }
+
     fun calculateSummary(transactions: List<StockTransaction>, includeDividends: Boolean = true): Flow<StockSummary> {
         Log.d("StockRepository", "calculateSummary called with includeDividends = $includeDividends")
         return allTransactions.map { txList ->
@@ -526,7 +681,8 @@ class StockRepository(
             // 用於計算今日損益的資料
             data class HoldingWithPrice(
                 val holding: StockHolding,
-                val previousClose: Double
+                val previousClose: Double,
+                val priceResponse: StockPriceResponse?  // 完整的價格回應（包含日期資訊）
             )
 
             // Calculate holdings
@@ -629,7 +785,7 @@ class StockRepository(
                             todayChangePercent = stockPrice?.changePercent ?: 0.0  // 今日漲跌幅
                         )
 
-                        HoldingWithPrice(holding, previousClose)
+                        HoldingWithPrice(holding, previousClose, stockPrice)
                     } else {
                         // API 失敗，跳過此持股（不顯示錯誤資料）
                         Log.w("StockRepository", "Skipping $code due to API failure")
@@ -674,9 +830,15 @@ class StockRepository(
                 0.0
             }
 
-            // 計算今日損益：(現價 - 昨收) * 持股數
+            // 計算今日損益：(現價 - 昨收) * 持股數（使用智能檢測）
             val todayProfitLoss = stockHoldingsWithPrice.sumOf { hwp ->
-                (hwp.holding.currentPrice - hwp.previousClose) * hwp.holding.quantity
+                calculateTodayProfitLossForHolding(
+                    code = hwp.holding.stockCode,
+                    currentPrice = hwp.holding.currentPrice,
+                    previousClose = hwp.previousClose,
+                    quantity = hwp.holding.quantity,
+                    priceResponse = hwp.priceResponse
+                )
             }
 
             // 計算昨日總市值

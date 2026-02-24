@@ -12,6 +12,7 @@ import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.provideContent
+import androidx.glance.appwidget.updateAll
 import androidx.glance.layout.*
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
@@ -25,12 +26,93 @@ import com.example.stonkseveryday.data.model.StockSummary
 import com.example.stonkseveryday.data.model.TransactionType
 import com.example.stonkseveryday.data.repository.StockRepository
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 class StockWidget : GlanceAppWidget() {
+
+    companion object {
+        private const val AUTO_REFRESH_INTERVAL = 10 * 60 * 1000L // 10 分鐘
+        private var isAutoRefreshing = false
+
+        /**
+         * 執行背景自動刷新
+         * 靜默刷新，不顯示 Toast
+         */
+        suspend fun performBackgroundRefresh(context: Context) {
+            // 避免重複執行
+            if (isAutoRefreshing) {
+                android.util.Log.d("StockWidget", "自動刷新已在進行中，跳過")
+                return
+            }
+
+            isAutoRefreshing = true
+
+            try {
+                android.util.Log.i("StockWidget", "========== 開始自動刷新 ==========")
+
+                // 取得所有持股的股票代碼
+                val database = StockDatabase.getDatabase(context)
+                val dao = database.stockTransactionDao()
+                val repository = StockRepository(dao, context)
+
+                val allTransactions = dao.getAllTransactions().first()
+                val holdings = mutableMapOf<String, MutableList<com.example.stonkseveryday.data.model.StockTransaction>>()
+                allTransactions.forEach { tx ->
+                    holdings.getOrPut(tx.stockCode) { mutableListOf() }.add(tx)
+                }
+
+                val stockCodes = holdings.keys.toList()
+                android.util.Log.i("StockWidget", "自動刷新 ${stockCodes.size} 支股票")
+
+                // 強制刷新每支股票的價格
+                var successCount = 0
+                var failCount = 0
+                for (stockCode in stockCodes) {
+                    try {
+                        val price = repository.getStockPrice(stockCode, forceRefresh = true)
+                        if (price != null && !price.isStale) {
+                            successCount++
+                        } else {
+                            failCount++
+                        }
+                    } catch (e: Exception) {
+                        failCount++
+                        android.util.Log.w("StockWidget", "$stockCode 自動刷新失敗: ${e.message}")
+                    }
+                }
+
+                android.util.Log.i("StockWidget", "自動刷新完成：成功 $successCount 支，失敗 $failCount 支")
+
+                // 只有在至少有一支股票更新成功時，才更新刷新時間
+                if (successCount > 0) {
+                    val prefs = context.getSharedPreferences("widget_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().putLong("last_refresh_time", System.currentTimeMillis()).apply()
+                    android.util.Log.d("StockWidget", "✓ 已更新刷新時間（自動刷新）")
+
+                    // 清除快取，強制重新計算
+                    WidgetDataCache.getData(context, forceRefresh = true)
+
+                    // 更新所有小工具
+                    StockWidget().updateAll(context)
+                    CompactStockWidget().updateAll(context)
+                    android.util.Log.d("StockWidget", "✓ 小工具已更新")
+                }
+
+                android.util.Log.i("StockWidget", "========== 自動刷新完成 ==========")
+
+            } catch (e: Exception) {
+                android.util.Log.e("StockWidget", "自動刷新異常: ${e.message}", e)
+            } finally {
+                isAutoRefreshing = false
+            }
+        }
+    }
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         // 先檢查 widget 是否仍然存在（提前過濾無效的 widget ID）
@@ -53,17 +135,38 @@ class StockWidget : GlanceAppWidget() {
             throw e
         }
 
+        // 檢查是否需要自動刷新（小工具顯示時）
+        val prefs = context.getSharedPreferences("widget_prefs", Context.MODE_PRIVATE)
+        val lastRefreshTime = prefs.getLong("last_refresh_time", 0L)
+        val now = System.currentTimeMillis()
+        val timeSinceLastRefresh = now - lastRefreshTime
+
+        if (lastRefreshTime > 0 && timeSinceLastRefresh >= AUTO_REFRESH_INTERVAL) {
+            android.util.Log.i(
+                "StockWidget",
+                "自動刷新觸發：距上次刷新 ${timeSinceLastRefresh / 1000 / 60} 分鐘"
+            )
+            // 使用 WorkManager 啟動背景刷新任務（避免阻塞 UI）
+            val workRequest = androidx.work.OneTimeWorkRequestBuilder<AutoRefreshWorker>()
+                .build()
+            androidx.work.WorkManager.getInstance(context).enqueue(workRequest)
+        }
+
         // Widget 存在，嘗試更新
         try {
             // 使用快取避免多個小工具同時計算
             val data = WidgetDataCache.getData(context, forceRefresh = false)
+
+            // 每次都從 SharedPreferences 讀取最新的刷新時間（不快取）
+            val prefs = context.getSharedPreferences("widget_prefs", Context.MODE_PRIVATE)
+            val lastRefreshTime = prefs.getLong("last_refresh_time", System.currentTimeMillis())
 
             provideContent {
                 WidgetContent(
                     dailyProfitLoss = data.dailyProfitLoss,
                     totalProfitLoss = data.totalProfitLoss,
                     totalAssets = data.totalAssets,
-                    lastRefreshTime = data.lastRefreshTime,
+                    lastRefreshTime = lastRefreshTime,
                     isCompact = false
                 )
             }
@@ -114,13 +217,18 @@ private fun formatAmount(amount: Double): String {
 /**
  * 格式化金額（精簡版，完全不含符號）
  * 用於精簡小工具，避免換行
+ *
+ * 注意：正負號透過顏色區分（紅色=正，綠色=負），所以這裡只顯示數值
  */
 private fun formatAmountCompact(amount: Double): String {
     val absAmount = kotlin.math.abs(amount)
 
     return when {
+        // >= 1億：顯示為 M (百萬)，最多 4 位數字 + "M" = 5 字元
         absAmount >= 100_000_000 -> String.format("%.1fM", absAmount / 1_000_000)
+        // >= 1萬：顯示為 K (千)，最多 5 位數字 + "K" = 6 字元
         absAmount >= 10_000 -> String.format("%.1fK", absAmount / 1_000)
+        // < 1萬：直接顯示整數，最多 4 位數字
         else -> String.format("%.0f", absAmount)
     }
 }
@@ -137,6 +245,32 @@ private fun formatRefreshTime(timestamp: Long): String {
             val dateFormat = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault())
             dateFormat.format(Date(timestamp))
         }
+    }
+}
+
+/**
+ * 根據金額數值智能計算緊湊型小工具的字體大小
+ * 避免數字過大時換行
+ *
+ * 緊湊型小工具的寬度有限（約 110dp），需要根據文字長度動態調整字體
+ *
+ * @param amount 金額數值
+ * @return 字體大小（sp）
+ */
+private fun calculateCompactFontSize(amount: Double): Int {
+    val formattedText = formatAmountCompact(amount)
+    val textLength = formattedText.length
+
+    // 根據文字長度動態調整字體大小
+    // 考慮負數會有 "-" 符號，需要更小的字體
+    return when {
+        textLength <= 3 -> 20  // 例如: "100", "1K"
+        textLength <= 4 -> 18  // 例如: "1.2K", "1000"
+        textLength <= 5 -> 16  // 例如: "12.3K", "-1.2K"
+        textLength <= 6 -> 14  // 例如: "123.4K", "-12.3K"
+        textLength <= 7 -> 12  // 例如: "1.2M", "-123.4K"
+        textLength <= 8 -> 11  // 例如: "12.3M", "-1.2M"
+        else -> 10             // 極端情況: "-12.3M" 或更大
     }
 }
 
@@ -240,7 +374,7 @@ fun WidgetContent(
                         Text(
                             text = if (isCompact) formatAmountCompact(dailyProfitLoss) else formatAmount(dailyProfitLoss),
                             style = TextStyle(
-                                fontSize = if (isCompact) 18.sp else 24.sp,
+                                fontSize = if (isCompact) calculateCompactFontSize(dailyProfitLoss).sp else 24.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (dailyProfitLoss >= 0) {
                                     // 賺錢：紅色（台股習慣）
@@ -340,8 +474,6 @@ fun WidgetContent(
 class RefreshWidgetCallback : androidx.glance.appwidget.action.ActionCallback {
     companion object {
         private var isRefreshing = false
-        private var lastRefreshTime = 0L
-        private const val MIN_REFRESH_INTERVAL = 3000L // 最短 3 秒才能再次刷新
     }
 
     override suspend fun onAction(
@@ -349,19 +481,33 @@ class RefreshWidgetCallback : androidx.glance.appwidget.action.ActionCallback {
         glanceId: GlanceId,
         parameters: androidx.glance.action.ActionParameters
     ) {
-        val now = System.currentTimeMillis()
-
-        // 防抖動：避免短時間內重複刷新
-        if (isRefreshing || (now - lastRefreshTime < MIN_REFRESH_INTERVAL)) {
-            android.util.Log.d("RefreshWidgetCallback", "防抖動：距上次刷新僅 ${now - lastRefreshTime}ms，跳過")
+        // 手動刷新：不設防抖，用戶點擊就立即執行
+        // 只檢查是否已經在刷新中，避免重複執行
+        if (isRefreshing) {
+            android.util.Log.d("RefreshWidgetCallback", "已經在刷新中，跳過")
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                android.widget.Toast.makeText(
+                    context,
+                    "正在刷新中，請稍候...",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
             return
         }
 
         isRefreshing = true
-        lastRefreshTime = now
+
+        // 顯示 Toast 提示用戶正在刷新
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            android.widget.Toast.makeText(
+                context,
+                "正在刷新股價...",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
 
         try {
-            android.util.Log.i("RefreshWidgetCallback", "開始刷新股價...")
+            android.util.Log.i("RefreshWidgetCallback", "========== 開始刷新股價 ==========")
 
             // 1. 取得所有持股的股票代碼
             val database = StockDatabase.getDatabase(context)
@@ -375,46 +521,108 @@ class RefreshWidgetCallback : androidx.glance.appwidget.action.ActionCallback {
             }
 
             val stockCodes = holdings.keys.toList()
-            android.util.Log.d("RefreshWidgetCallback", "需要更新 ${stockCodes.size} 支股票: $stockCodes")
+            android.util.Log.i("RefreshWidgetCallback", "需要更新 ${stockCodes.size} 支股票: $stockCodes")
 
-            // 2. 呼叫 API 更新每支股票的價格（repository.getStockPrice 會更新快取）
+            // 2. 強制刷新每支股票的價格（跳過快取）
             var successCount = 0
             var failCount = 0
             for (stockCode in stockCodes) {
                 try {
-                    val price = repository.getStockPrice(stockCode)
+                    android.util.Log.d("RefreshWidgetCallback", "正在更新 $stockCode...")
+                    val price = repository.getStockPrice(stockCode, forceRefresh = true)
                     if (price != null && !price.isStale) {
                         successCount++
-                        android.util.Log.d("RefreshWidgetCallback", "$stockCode 股價更新成功: ${price.currentPrice}")
+                        android.util.Log.d("RefreshWidgetCallback", "✓ $stockCode 股價更新成功: ${price.currentPrice}")
                     } else {
                         failCount++
-                        android.util.Log.w("RefreshWidgetCallback", "$stockCode 股價更新失敗或使用舊資料")
+                        android.util.Log.w("RefreshWidgetCallback", "✗ $stockCode 股價更新失敗或使用舊資料")
                     }
                 } catch (e: Exception) {
                     failCount++
-                    android.util.Log.e("RefreshWidgetCallback", "$stockCode 股價更新異常: ${e.message}", e)
+                    android.util.Log.e("RefreshWidgetCallback", "✗ $stockCode 股價更新異常: ${e.message}", e)
                 }
             }
 
             android.util.Log.i("RefreshWidgetCallback", "股價更新完成：成功 $successCount 支，失敗 $failCount 支")
 
-            // 3. 更新刷新時間
-            val prefs = context.getSharedPreferences("widget_prefs", Context.MODE_PRIVATE)
-            prefs.edit().putLong("last_refresh_time", System.currentTimeMillis()).apply()
+            // 3. 只有在至少有一支股票更新成功時，才更新刷新時間
+            if (successCount > 0) {
+                val prefs = context.getSharedPreferences("widget_prefs", Context.MODE_PRIVATE)
+                prefs.edit().putLong("last_refresh_time", System.currentTimeMillis()).apply()
+                android.util.Log.d("RefreshWidgetCallback", "✓ 已更新刷新時間（成功更新 $successCount 支股票）")
+            } else {
+                android.util.Log.w("RefreshWidgetCallback", "✗ 沒有股票更新成功，不更新刷新時間")
+            }
 
-            // 4. 清除快取，讓 widget 重新計算
+            // 4. 清除快取，強制重新計算
+            android.util.Log.d("RefreshWidgetCallback", "清除小工具資料快取")
             WidgetDataCache.getData(context, forceRefresh = true)
 
-            // 5. 使用 WorkManager 觸發 widget 更新（避免 coroutine scope 被取消）
-            android.util.Log.d("RefreshWidgetCallback", "觸發 WorkManager 更新 widget")
-            val workRequest = androidx.work.OneTimeWorkRequestBuilder<StockWidgetWorker>()
-                .build()
-            androidx.work.WorkManager.getInstance(context).enqueue(workRequest)
+            // 5. 直接更新所有小工具（不使用 WorkManager，避免延遲）
+            android.util.Log.d("RefreshWidgetCallback", "開始更新所有小工具...")
+            try {
+                StockWidget().updateAll(context)
+                android.util.Log.d("RefreshWidgetCallback", "✓ 完整小工具更新完成")
+            } catch (e: Exception) {
+                android.util.Log.e("RefreshWidgetCallback", "✗ 完整小工具更新失敗: ${e.message}", e)
+            }
+
+            try {
+                CompactStockWidget().updateAll(context)
+                android.util.Log.d("RefreshWidgetCallback", "✓ 緊湊小工具更新完成")
+            } catch (e: Exception) {
+                android.util.Log.e("RefreshWidgetCallback", "✗ 緊湊小工具更新失敗: ${e.message}", e)
+            }
+
+            android.util.Log.i("RefreshWidgetCallback", "========== 刷新完成 ==========")
+
+            // 顯示刷新結果
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                val message = if (successCount > 0) {
+                    "刷新完成：成功 $successCount 支股票"
+                } else {
+                    "刷新失敗：無法更新股價"
+                }
+                android.widget.Toast.makeText(
+                    context,
+                    message,
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
 
         } catch (e: Exception) {
-            android.util.Log.e("RefreshWidgetCallback", "刷新失敗: ${e.message}", e)
+            android.util.Log.e("RefreshWidgetCallback", "========== 刷新失敗: ${e.message} ==========", e)
+
+            // 顯示錯誤訊息
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                android.widget.Toast.makeText(
+                    context,
+                    "刷新失敗：${e.message}",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
         } finally {
             isRefreshing = false
+        }
+    }
+}
+
+/**
+ * 自動刷新 Worker
+ * 用於背景靜默刷新，不顯示 Toast
+ */
+class AutoRefreshWorker(
+    context: Context,
+    params: androidx.work.WorkerParameters
+) : androidx.work.CoroutineWorker(context, params) {
+
+    override suspend fun doWork(): androidx.work.ListenableWorker.Result {
+        return try {
+            StockWidget.performBackgroundRefresh(applicationContext)
+            androidx.work.ListenableWorker.Result.success()
+        } catch (e: Exception) {
+            android.util.Log.e("AutoRefreshWorker", "自動刷新失敗", e)
+            androidx.work.ListenableWorker.Result.failure()
         }
     }
 }

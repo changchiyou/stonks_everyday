@@ -17,5 +17,7 @@ data class StockPriceCache(
     val changePercent: Double,
     val lastUpdateTime: Long,  // 最後更新時間（毫秒）
     val isStale: Boolean = false,  // 是否過期（超過1天未更新）
-    val askPrice: Double? = null   // 即時賣一價
+    val askPrice: Double? = null,   // 即時賣一價
+    val previousCloseDate: String? = null,  // previousClose 對應的日期 (yyyy-MM-dd)
+    val currentPriceDate: String? = null    // currentPrice 對應的日期 (yyyy-MM-dd)
 )
