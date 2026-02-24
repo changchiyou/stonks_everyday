@@ -71,7 +71,17 @@ data class TwseStockInfo(
     @SerializedName("t") // 最新成交時間 (HH:MM:SS)
     val tradeTime: String,
     @SerializedName("d") // 當日日期 (yyyyMMdd)
-    val date: String
+    val date: String,
+    @SerializedName("s") // 試撮價格（開盤前試撮時段使用）
+    val trialMatchPrice: String? = null,
+    @SerializedName("a") // 賣出委託價（五檔，格式: "price1_price2_price3_price4_price5_"）
+    val askPrices: String? = null,
+    @SerializedName("b") // 買入委託價（五檔，格式: "price1_price2_price3_price4_price5_"）
+    val bidPrices: String? = null,
+    @SerializedName("it") // 交易類型標記（12 = 一般交易）
+    val tradeType: String? = null,
+    @SerializedName("ts") // 交易狀態（0 = 正常交易）
+    val tradeStatus: String? = null
 )
 
 object TwseRetrofitInstance {

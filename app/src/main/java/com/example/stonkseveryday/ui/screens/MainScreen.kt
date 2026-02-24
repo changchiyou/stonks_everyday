@@ -437,7 +437,7 @@ fun HoldingItem(
                 .padding(if (isSmallScreen) 12.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(if (isSmallScreen) 6.dp else 8.dp)
         ) {
-            // 第一行：股票代碼、股票名稱、損益百分比
+            // 第一行：股票代碼、股票名稱、今日損益
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -457,30 +457,26 @@ fun HoldingItem(
                     )
                 }
 
-                // 報酬率顯示：零成本時顯示特殊提示
-                if (holding.isZeroCost) {
-                    Text(
-                        text = "🎉 零成本",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                } else {
-                    Text(
-                        text = "${if (holding.profitLossPercentage >= 0) "+" else ""}${"%.2f".format(holding.profitLossPercentage)}%",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = if (holding.profitLoss >= 0)
-                            MaterialTheme.colorScheme.tertiary
-                        else
-                            MaterialTheme.colorScheme.error
-                    )
-                }
+                // 今日損益：(現價 - 昨收價) × 持股數量
+                // 昨收價 = 現價 / (1 + 今日漲跌幅%)
+                val previousClose = holding.currentPrice / (1 + holding.todayChangePercent / 100)
+                val todayProfitLoss = (holding.currentPrice - previousClose) * holding.quantity
+
+                Text(
+                    text = "${if (todayProfitLoss >= 0) "+" else ""}${formatCurrency(todayProfitLoss)}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = when {
+                        todayProfitLoss > 0 -> MaterialTheme.colorScheme.error  // 上漲：紅色
+                        todayProfitLoss < 0 -> MaterialTheme.colorScheme.tertiary  // 下跌：綠色
+                        else -> MaterialTheme.colorScheme.onSurface  // 平盤：黑色
+                    }
+                )
             }
 
             HorizontalDivider()
 
-            // 第二行：股數、成本價、現價
+            // 第二行：股數、成本價、持股比重、報酬率%（4欄）
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -511,6 +507,91 @@ fun HoldingItem(
                     )
                 }
 
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "持股比重",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "${"%.2f".format(holding.positionRatio)}%",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                    // 報酬率顯示：零成本時顯示特殊提示
+                    Text(
+                        text = "報酬率",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    if (holding.isZeroCost) {
+                        Text(
+                            text = "🎉零成本",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        Text(
+                            text = "${if (holding.profitLossPercentage >= 0) "+" else ""}${"%.2f".format(holding.profitLossPercentage)}%",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = if (holding.profitLoss >= 0)
+                                MaterialTheme.colorScheme.error  // 賺錢：紅色
+                            else
+                                MaterialTheme.colorScheme.tertiary  // 虧錢：綠色
+                        )
+                    }
+                }
+            }
+
+            // 第三行：今日漲跌幅、今日漲跌額、現價
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "今日漲跌幅",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "${if (holding.todayChangePercent >= 0) "+" else ""}${"%.2f".format(holding.todayChangePercent)}%",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = when {
+                            holding.todayChangePercent > 0 -> MaterialTheme.colorScheme.error  // 上漲：紅色
+                            holding.todayChangePercent < 0 -> MaterialTheme.colorScheme.tertiary  // 下跌：綠色
+                            else -> MaterialTheme.colorScheme.onSurface  // 平盤：黑色
+                        }
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "今日漲跌額",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    // 計算今日漲跌額 = 昨收價 × 今日漲跌幅%
+                    val previousClose = holding.currentPrice / (1 + holding.todayChangePercent / 100)
+                    val todayChange = previousClose * (holding.todayChangePercent / 100)
+                    Text(
+                        text = "${if (todayChange >= 0) "+" else ""}${"%.2f".format(todayChange)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = when {
+                            todayChange > 0 -> MaterialTheme.colorScheme.error  // 上漲：紅色
+                            todayChange < 0 -> MaterialTheme.colorScheme.tertiary  // 下跌：綠色
+                            else -> MaterialTheme.colorScheme.onSurface  // 平盤：黑色
+                        }
+                    )
+                }
+
                 Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
                     Text(
                         text = "現價",
@@ -525,7 +606,7 @@ fun HoldingItem(
                 }
             }
 
-            // 第三行：現值、損益、持股比重
+            // 第四行：預估市值、累積股利、未實現損益
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -544,42 +625,6 @@ fun HoldingItem(
                 }
 
                 Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "未實現損益",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
-                    Text(
-                        text = "${if (holding.profitLoss >= 0) "+" else ""}${formatCurrency(holding.profitLoss)}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = if (holding.profitLoss >= 0)
-                            MaterialTheme.colorScheme.error  // 賺錢：紅色（台股習慣）
-                        else
-                            MaterialTheme.colorScheme.tertiary  // 虧錢：綠色（台股習慣）
-                    )
-                }
-
-                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = "持股比重",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
-                    Text(
-                        text = "${"%.2f".format(holding.positionRatio)}%",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-
-            // 第四行：累積股利（永遠顯示，但開關控制是否納入損益計算）
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Start
-            ) {
-                Column {
                     Text(
                         text = "累積股利",
                         style = MaterialTheme.typography.bodySmall,
@@ -618,6 +663,23 @@ fun HoldingItem(
                             )
                         }
                     }
+                }
+
+                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "未實現損益",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "${if (holding.profitLoss >= 0) "+" else ""}${formatCurrency(holding.profitLoss)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = if (holding.profitLoss >= 0)
+                            MaterialTheme.colorScheme.error  // 賺錢：紅色（台股習慣）
+                        else
+                            MaterialTheme.colorScheme.tertiary  // 虧錢：綠色（台股習慣）
+                    )
                 }
             }
         }

@@ -26,5 +26,7 @@ data class StockHolding(
     val isPriceStale: Boolean = false, // 股價資料是否過期（API 失敗，使用快取）
     val adjustedCost: Double = 0.0,   // 調整後成本（扣除股利後，可能為負）
     val isZeroCost: Boolean = false,   // 是否達成零成本
-    val dividendQueryStatus: DividendQueryStatus = DividendQueryStatus.SUCCESS // 股利查詢狀態
+    val dividendQueryStatus: DividendQueryStatus = DividendQueryStatus.SUCCESS, // 股利查詢狀態
+    val askPrice: Double? = null,     // 即時賣一價（委託價第一檔）
+    val todayChangePercent: Double = 0.0 // 今日漲跌幅 % (相對於昨收價)
 )

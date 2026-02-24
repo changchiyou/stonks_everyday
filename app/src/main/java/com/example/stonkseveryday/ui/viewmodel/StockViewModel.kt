@@ -386,10 +386,16 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 _isRefreshing.value = true
                 android.util.Log.d("StockViewModel", "開始刷新股價")
+
+                // 先清除所有股價快取，強制重新抓取
+                repository.clearPriceCache()
+                android.util.Log.d("StockViewModel", "已清除股價快取")
+
                 // 觸發重新計算摘要（會重新呼叫 API 取得最新股價）
                 val now = System.currentTimeMillis()
                 _refreshTrigger.value = now
                 _lastRefreshTime.value = now
+
                 // 等待一下讓 API 呼叫完成
                 kotlinx.coroutines.delay(1000)
                 android.util.Log.d("StockViewModel", "股價刷新完成")

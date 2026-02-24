@@ -18,7 +18,7 @@ import com.example.stonkseveryday.data.model.StockTransaction
         DividendCalculationRecord::class,
         com.example.stonkseveryday.data.model.StockPriceCache::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -174,6 +174,16 @@ abstract class StockDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // 在 stock_price_cache 表中新增 askPrice 欄位（賣一價）
+                // 預設為 NULL
+                database.execSQL(
+                    "ALTER TABLE stock_price_cache ADD COLUMN askPrice REAL DEFAULT NULL"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): StockDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -181,7 +191,7 @@ abstract class StockDatabase : RoomDatabase() {
                     StockDatabase::class.java,
                     "stock_database"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                     .build()
                 INSTANCE = instance
                 instance

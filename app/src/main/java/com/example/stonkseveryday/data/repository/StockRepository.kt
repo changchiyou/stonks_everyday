@@ -172,28 +172,37 @@ class StockRepository(
      * 2. 如果 TWSE 失敗，使用 FinMind API（歷史收盤價）
      *
      * @param stockCode 股票代碼 (例如: 2330)
+     * @param forceRefresh 是否強制刷新（忽略快取），預設 false
      * @return 股價資訊或 null（如果兩個 API 都失敗）
      */
-    suspend fun getStockPrice(stockCode: String): StockPriceResponse? {
-        Log.d("StockRepository", "getStockPrice for $stockCode")
+    suspend fun getStockPrice(stockCode: String, forceRefresh: Boolean = false): StockPriceResponse? {
+        Log.d("StockRepository", "getStockPrice for $stockCode (forceRefresh=$forceRefresh)")
 
-        // 策略 0: 先檢查快取是否新鮮（5分鐘內）
-        val cachedPrice = stockPriceCacheDao.getPriceCache(stockCode)
-        if (cachedPrice != null) {
-            val ageInMinutes = (System.currentTimeMillis() - cachedPrice.lastUpdateTime) / (1000 * 60)
-            if (ageInMinutes < 5) {
-                Log.d("StockRepository", "Using fresh cache for $stockCode (age: ${ageInMinutes}m)")
-                return StockPriceResponse(
-                    stockCode = cachedPrice.stockCode,
-                    currentPrice = cachedPrice.currentPrice,
-                    previousClose = cachedPrice.previousClose,
-                    change = cachedPrice.change,
-                    changePercent = cachedPrice.changePercent,
-                    timestamp = cachedPrice.lastUpdateTime,
-                    isStale = false
-                )
+        // 策略 0: 先檢查快取是否新鮮（5分鐘內），除非強制刷新
+        if (!forceRefresh) {
+            val cachedPrice = stockPriceCacheDao.getPriceCache(stockCode)
+            if (cachedPrice != null) {
+                val ageInMinutes = (System.currentTimeMillis() - cachedPrice.lastUpdateTime) / (1000 * 60)
+                if (ageInMinutes < 5) {
+                    Log.d("StockRepository", "Using fresh cache for $stockCode (age: ${ageInMinutes}m)")
+                    return StockPriceResponse(
+                        stockCode = cachedPrice.stockCode,
+                        currentPrice = cachedPrice.currentPrice,
+                        previousClose = cachedPrice.previousClose,
+                        change = cachedPrice.change,
+                        changePercent = cachedPrice.changePercent,
+                        timestamp = cachedPrice.lastUpdateTime,
+                        isStale = false,
+                        askPrice = cachedPrice.askPrice
+                    )
+                }
             }
+        } else {
+            Log.d("StockRepository", "Force refresh enabled, skipping cache for $stockCode")
         }
+
+        // 策略 0.5: 如果強制刷新，仍然讀取快取用於後續 fallback
+        val cachedPrice = if (forceRefresh) stockPriceCacheDao.getPriceCache(stockCode) else null
 
         // 策略 1: 快取過期，嘗試 TWSE API（有即時價格和昨收，適合計算今日損益）
         val twsePrice = getStockPriceFromTwse(stockCode)
@@ -218,17 +227,19 @@ class StockRepository(
         }
 
         // 策略 3: 兩個 API 都失敗，使用快取的股價（即使過期）
-        if (cachedPrice != null) {
-            val ageInHours = (System.currentTimeMillis() - cachedPrice.lastUpdateTime) / (1000 * 60 * 60)
+        val fallbackCache = cachedPrice ?: stockPriceCacheDao.getPriceCache(stockCode)
+        if (fallbackCache != null) {
+            val ageInHours = (System.currentTimeMillis() - fallbackCache.lastUpdateTime) / (1000 * 60 * 60)
             Log.w("StockRepository", "Both APIs failed for $stockCode, using stale cache (age: ${ageInHours}h)")
             return StockPriceResponse(
-                stockCode = cachedPrice.stockCode,
-                currentPrice = cachedPrice.currentPrice,
-                previousClose = cachedPrice.previousClose,
-                change = cachedPrice.change,
-                changePercent = cachedPrice.changePercent,
-                timestamp = cachedPrice.lastUpdateTime,
-                isStale = true  // 標記為過期
+                stockCode = fallbackCache.stockCode,
+                currentPrice = fallbackCache.currentPrice,
+                previousClose = fallbackCache.previousClose,
+                change = fallbackCache.change,
+                changePercent = fallbackCache.changePercent,
+                timestamp = fallbackCache.lastUpdateTime,
+                isStale = true,  // 標記為過期
+                askPrice = fallbackCache.askPrice
             )
         }
 
@@ -247,9 +258,27 @@ class StockRepository(
             change = price.change,
             changePercent = price.changePercent,
             lastUpdateTime = System.currentTimeMillis(),
-            isStale = false
+            isStale = false,
+            askPrice = price.askPrice
         )
         stockPriceCacheDao.insertOrUpdate(cache)
+    }
+
+    /**
+     * 清除所有股價快取
+     * 用於手動刷新時強制重新抓取最新價格
+     */
+    suspend fun clearPriceCache() {
+        Log.d("StockRepository", "清除所有股價快取")
+        stockPriceCacheDao.deleteAll()
+    }
+
+    /**
+     * 清除特定股票的價格快取
+     */
+    suspend fun clearPriceCacheForStock(stockCode: String) {
+        Log.d("StockRepository", "清除 $stockCode 的股價快取")
+        stockPriceCacheDao.delete(stockCode)
     }
 
     /**
@@ -318,6 +347,14 @@ class StockRepository(
      * 股票代碼格式說明：
      * - 上市股票 (TSE)：tse_XXXX.tw (例如：tse_2330.tw)
      * - 上櫃股票 (OTC)：otc_XXXX.tw (例如：otc_6488.tw)
+     *
+     * Fallback 優先級（按照證券所常見處理方式）：
+     * 1. z (最新成交價) - 盤中有成交時
+     * 2. s (試撮價) - 開盤前試撮時段
+     * 3. a (賣一價) - 盤中無成交但有委託時，優先使用賣一價
+     * 4. b (買一價) - 如果沒有賣價，才使用買一價
+     * 5. o (開盤價) - 開盤後但無其他價格時
+     * 6. y (昨收價) - 最後的選擇
      */
     private suspend fun getStockPriceFromTwse(stockCode: String): StockPriceResponse? = try {
         // 預設為上市股票，可根據需求調整
@@ -328,26 +365,7 @@ class StockRepository(
 
         if (response.code == "0000" && !response.data.isNullOrEmpty()) {
             val stockInfo = response.data.first()
-
-            // 解析價格（可能為 "-" 表示尚未交易）
-            val currentPrice = stockInfo.currentPrice.replace(",", "").toDoubleOrNull() ?: return null
-            val previousClose = stockInfo.previousClose.replace(",", "").toDoubleOrNull() ?: return null
-
-            val change = currentPrice - previousClose
-            val changePercent = if (previousClose != 0.0) {
-                (change / previousClose) * 100
-            } else 0.0
-
-            Log.i("StockRepository", "TWSE API success: $stockCode = $currentPrice (${stockInfo.tradeTime})")
-
-            StockPriceResponse(
-                stockCode = stockCode,
-                currentPrice = currentPrice,
-                previousClose = previousClose,
-                change = change,
-                changePercent = changePercent,
-                timestamp = System.currentTimeMillis()
-            )
+            parseTwseStockPrice(stockCode, stockInfo)
         } else {
             // 可能是上櫃股票，嘗試 OTC
             val otcCode = "otc_${stockCode}.tw"
@@ -356,24 +374,7 @@ class StockRepository(
 
             if (otcResponse.code == "0000" && !otcResponse.data.isNullOrEmpty()) {
                 val stockInfo = otcResponse.data.first()
-                val currentPrice = stockInfo.currentPrice.replace(",", "").toDoubleOrNull() ?: return null
-                val previousClose = stockInfo.previousClose.replace(",", "").toDoubleOrNull() ?: return null
-
-                val change = currentPrice - previousClose
-                val changePercent = if (previousClose != 0.0) {
-                    (change / previousClose) * 100
-                } else 0.0
-
-                Log.i("StockRepository", "TWSE OTC API success: $stockCode = $currentPrice")
-
-                StockPriceResponse(
-                    stockCode = stockCode,
-                    currentPrice = currentPrice,
-                    previousClose = previousClose,
-                    change = change,
-                    changePercent = changePercent,
-                    timestamp = System.currentTimeMillis()
-                )
+                parseTwseStockPrice(stockCode, stockInfo)
             } else {
                 Log.e("StockRepository", "TWSE API returned no data for $stockCode (tried both TSE and OTC)")
                 null
@@ -382,6 +383,121 @@ class StockRepository(
     } catch (e: Exception) {
         Log.e("StockRepository", "Error with TWSE API for $stockCode", e)
         null
+    }
+
+    /**
+     * 解析 TWSE API 回傳的股價資料，使用 fallback 機制
+     *
+     * @param stockCode 股票代碼
+     * @param stockInfo TWSE API 回傳的股票資訊
+     * @return 股價回應或 null
+     */
+    private fun parseTwseStockPrice(
+        stockCode: String,
+        stockInfo: com.example.stonkseveryday.data.api.TwseStockInfo
+    ): StockPriceResponse? {
+        // 昨收價（必須有，否則無法計算漲跌）
+        val previousClose = stockInfo.previousClose.replace(",", "").toDoubleOrNull()
+        if (previousClose == null) {
+            Log.e("StockRepository", "TWSE: $stockCode 沒有昨收價，無法計算")
+            return null
+        }
+
+        var currentPrice: Double? = null
+        var priceSource = ""
+
+        // 策略 1: 優先使用最新成交價 (z)
+        stockInfo.currentPrice.replace(",", "").toDoubleOrNull()?.let {
+            currentPrice = it
+            priceSource = "成交價"
+        }
+
+        // 策略 2: 試撮價格 (s) - 開盤前試撮時段
+        if (currentPrice == null && !stockInfo.trialMatchPrice.isNullOrEmpty()) {
+            stockInfo.trialMatchPrice.replace(",", "").toDoubleOrNull()?.let {
+                if (it > 0) {
+                    currentPrice = it
+                    priceSource = "試撮價"
+                }
+            }
+        }
+
+        // 提取賣一價（不論是否用於現價，都需要記錄）
+        val askPrice = parseFirstPrice(stockInfo.askPrices)
+
+        // 策略 3: 委託價 (a/b) - 盤中無成交但有委託
+        // 按照證券所常見處理方式，優先使用賣一價作為即時現價
+        if (currentPrice == null) {
+            val bidPrice = parseFirstPrice(stockInfo.bidPrices) // 買一價
+
+            when {
+                askPrice != null -> {
+                    // 優先使用賣一價（證券所常見做法）
+                    currentPrice = askPrice
+                    priceSource = "賣一價"
+                }
+                bidPrice != null -> {
+                    // 如果沒有賣價，才使用買一價
+                    currentPrice = bidPrice
+                    priceSource = "買一價"
+                }
+            }
+        }
+
+        // 策略 4: 開盤價 (o) - 今日已開盤但無其他價格
+        if (currentPrice == null && !stockInfo.openPrice.isEmpty() && stockInfo.openPrice != "-") {
+            stockInfo.openPrice.replace(",", "").toDoubleOrNull()?.let {
+                if (it > 0) {
+                    currentPrice = it
+                    priceSource = "開盤價"
+                }
+            }
+        }
+
+        // 策略 5: 昨收價 (y) - 最後的選擇（開盤前或無任何資料）
+        if (currentPrice == null) {
+            currentPrice = previousClose
+            priceSource = "昨收價"
+        }
+
+        // 計算漲跌
+        val change = currentPrice!! - previousClose
+        val changePercent = if (previousClose != 0.0) {
+            (change / previousClose) * 100
+        } else 0.0
+
+        Log.i(
+            "StockRepository",
+            "TWSE: $stockCode = $currentPrice [$priceSource] (昨收:$previousClose, 賣一:${askPrice ?: "N/A"}, 時間:${stockInfo.tradeTime})"
+        )
+
+        return StockPriceResponse(
+            stockCode = stockCode,
+            currentPrice = currentPrice,
+            previousClose = previousClose,
+            change = change,
+            changePercent = changePercent,
+            timestamp = System.currentTimeMillis(),
+            askPrice = askPrice  // 新增賣一價
+        )
+    }
+
+    /**
+     * 解析 TWSE 委託價格字串的第一檔價格
+     * 格式: "1930.0000_1935.0000_1940.0000_1945.0000_1950.0000_"
+     *
+     * @param pricesString 委託價格字串
+     * @return 第一檔價格或 null
+     */
+    private fun parseFirstPrice(pricesString: String?): Double? {
+        if (pricesString.isNullOrEmpty() || pricesString == "-") return null
+
+        return pricesString
+            .split("_")
+            .firstOrNull()
+            ?.replace(",", "")
+            ?.toDoubleOrNull()
+            ?.takeIf { it > 0 }
     }
 
     /**
@@ -508,7 +624,9 @@ class StockRepository(
                             isPriceStale = stockPrice?.isStale ?: (stockPrice == null),  // API 失敗或使用過期快取
                             adjustedCost = adjustedCostBasis,
                             isZeroCost = isZeroCost,
-                            dividendQueryStatus = dividendQueryStatus
+                            dividendQueryStatus = dividendQueryStatus,
+                            askPrice = stockPrice?.askPrice,  // 賣一價
+                            todayChangePercent = stockPrice?.changePercent ?: 0.0  // 今日漲跌幅
                         )
 
                         HoldingWithPrice(holding, previousClose)

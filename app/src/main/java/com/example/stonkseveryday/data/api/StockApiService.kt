@@ -107,7 +107,8 @@ data class StockPriceResponse(
     val change: Double,
     val changePercent: Double,
     val timestamp: Long,
-    val isStale: Boolean = false  // 資料是否過期（來自快取且超過24小時）
+    val isStale: Boolean = false,  // 資料是否過期（來自快取且超過24小時）
+    val askPrice: Double? = null   // 即時賣一價（委託價第一檔），僅 TWSE API 提供
 )
 
 // 股票基本資訊回應
