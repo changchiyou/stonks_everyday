@@ -4,9 +4,11 @@ import android.content.Context
 import android.net.Uri
 import com.example.stonkseveryday.data.api.RetrofitInstance
 import com.example.stonkseveryday.data.database.StockDatabase
+import com.example.stonkseveryday.data.model.ColorCustomization
 import com.example.stonkseveryday.data.model.Dividend
 import com.example.stonkseveryday.data.model.StockTransaction
 import com.example.stonkseveryday.data.model.TransactionType
+import com.example.stonkseveryday.data.preferences.UserPreferences
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +22,7 @@ import java.util.*
 
 class BackupManager(private val context: Context) {
     private val database = StockDatabase.getDatabase(context)
+    private val userPreferences = UserPreferences(context)
     private val gson = Gson()
 
     /**
@@ -62,9 +65,30 @@ class BackupManager(private val context: Context) {
         val note: String = ""
     )
 
+    /**
+     * 備份用的使用者設定（不包含敏感資訊如 API Token）
+     */
+    data class BackupSettings(
+        @SerializedName("default_fee_rate")
+        val defaultFeeRate: Double? = null,
+        @SerializedName("default_stock_tax_rate")
+        val defaultStockTaxRate: Double? = null,
+        @SerializedName("default_etf_tax_rate")
+        val defaultEtfTaxRate: Double? = null,
+        @SerializedName("include_dividends")
+        val includeDividends: Boolean? = null,
+        @SerializedName("light_colors")
+        val lightColors: ColorCustomization? = null,
+        @SerializedName("dark_colors")
+        val darkColors: ColorCustomization? = null
+    )
+
+    /**
+     * 交易資料備份（包含交易記錄和股利）
+     */
     data class BackupData(
         @SerializedName("version")
-        val version: Int = 2,  // 升級到版本 2
+        val version: Int = 3,
         @SerializedName("backup_date")
         val backupDate: String,
         @SerializedName("transactions")
@@ -74,11 +98,23 @@ class BackupManager(private val context: Context) {
     )
 
     /**
-     * 備份所有資料到 URI
+     * 個人設定備份（費率、顏色等，不含敏感資訊）
+     */
+    data class SettingsBackupData(
+        @SerializedName("version")
+        val version: Int = 1,
+        @SerializedName("backup_date")
+        val backupDate: String,
+        @SerializedName("settings")
+        val settings: BackupSettings
+    )
+
+    /**
+     * 備份交易資料到 URI（包含交易記錄和股利）
      * @param uri 備份檔案的 URI（由 SAF 提供）
      * @return 是否成功
      */
-    suspend fun backupToUri(uri: Uri): Boolean = withContext(Dispatchers.IO) {
+    suspend fun backupTransactionsToUri(uri: Uri): Boolean = withContext(Dispatchers.IO) {
         try {
             // 使用 first() 取得資料，而不是 collect
             val txList = database.stockTransactionDao().getAllTransactions().first()
@@ -132,13 +168,49 @@ class BackupManager(private val context: Context) {
     }
 
     /**
-     * 從 URI 恢復資料
+     * 備份個人設定到 URI（費率、顏色等，不含 API Token）
+     * @param uri 備份檔案的 URI（由 SAF 提供）
+     * @return 是否成功
+     */
+    suspend fun backupSettingsToUri(uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val backupSettings = BackupSettings(
+                defaultFeeRate = userPreferences.defaultFeeRate.first(),
+                defaultStockTaxRate = userPreferences.defaultStockTaxRate.first(),
+                defaultEtfTaxRate = userPreferences.defaultEtfTaxRate.first(),
+                includeDividends = userPreferences.includeDividends.first(),
+                lightColors = userPreferences.lightColorCustomization.first(),
+                darkColors = userPreferences.darkColorCustomization.first()
+            )
+
+            val settingsBackup = SettingsBackupData(
+                backupDate = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()),
+                settings = backupSettings
+            )
+
+            val json = gson.toJson(settingsBackup)
+
+            context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                OutputStreamWriter(outputStream).use { writer ->
+                    writer.write(json)
+                }
+            }
+
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    /**
+     * 從 URI 恢復交易資料（交易記錄和股利）
      * @param uri 備份檔案的 URI（由 SAF 提供）
      * @param clearExisting 是否先清除現有資料（預設為 true）
      * @param token FinMind API Token（用於查詢股票資訊，可選）
      * @return 是否成功
      */
-    suspend fun restoreFromUri(uri: Uri, clearExisting: Boolean = true, token: String = ""): Boolean = withContext(Dispatchers.IO) {
+    suspend fun restoreTransactionsFromUri(uri: Uri, clearExisting: Boolean = true, token: String = ""): Boolean = withContext(Dispatchers.IO) {
         try {
             val json = context.contentResolver.openInputStream(uri)?.use { inputStream ->
                 BufferedReader(InputStreamReader(inputStream)).use { reader ->
@@ -148,9 +220,9 @@ class BackupManager(private val context: Context) {
 
             val backupData = gson.fromJson(json, BackupData::class.java)
 
-            // 檢查版本相容性
-            if (backupData.version != 2) {
-                android.util.Log.e("BackupManager", "不支援的備份版本: ${backupData.version}，目前僅支援版本 2")
+            // 檢查版本相容性（支援版本 2 和 3）
+            if (backupData.version !in 2..3) {
+                android.util.Log.e("BackupManager", "不支援的備份版本: ${backupData.version}，目前僅支援版本 2-3")
                 return@withContext false
             }
 
@@ -218,6 +290,44 @@ class BackupManager(private val context: Context) {
     }
 
     /**
+     * 從 URI 恢復個人設定（費率、顏色等）
+     * @param uri 備份檔案的 URI（由 SAF 提供）
+     * @return 是否成功
+     */
+    suspend fun restoreSettingsFromUri(uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val json = context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                BufferedReader(InputStreamReader(inputStream)).use { reader ->
+                    reader.readText()
+                }
+            } ?: return@withContext false
+
+            val settingsBackup = gson.fromJson(json, SettingsBackupData::class.java)
+
+            // 檢查版本相容性
+            if (settingsBackup.version != 1) {
+                android.util.Log.e("BackupManager", "不支援的設定備份版本: ${settingsBackup.version}")
+                return@withContext false
+            }
+
+            // 恢復設定
+            settingsBackup.settings.let { settings ->
+                settings.defaultFeeRate?.let { userPreferences.saveDefaultFeeRate(it) }
+                settings.defaultStockTaxRate?.let { userPreferences.saveDefaultStockTaxRate(it) }
+                settings.defaultEtfTaxRate?.let { userPreferences.saveDefaultEtfTaxRate(it) }
+                settings.includeDividends?.let { userPreferences.saveIncludeDividends(it) }
+                settings.lightColors?.let { userPreferences.saveLightColorCustomization(it) }
+                settings.darkColors?.let { userPreferences.saveDarkColorCustomization(it) }
+            }
+
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    /**
      * 從 API 取得股票資訊
      * @return Pair(股票名稱, 是否為ETF)
      */
@@ -269,10 +379,26 @@ class BackupManager(private val context: Context) {
     }
 
     /**
-     * 生成建議的備份檔名
+     * 生成交易資料備份檔名
      */
-    fun generateBackupFileName(): String {
+    fun generateTransactionsBackupFileName(): String {
         val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
-        return "stonks_backup_${dateFormat.format(Date())}.json"
+        return "stonks_transactions_${dateFormat.format(Date())}.json"
+    }
+
+    /**
+     * 生成個人設定備份檔名
+     */
+    fun generateSettingsBackupFileName(): String {
+        val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+        return "stonks_settings_${dateFormat.format(Date())}.json"
+    }
+
+    /**
+     * 生成建議的備份檔名（舊版相容，建議使用新的分類方法）
+     */
+    @Deprecated("請使用 generateTransactionsBackupFileName() 或 generateSettingsBackupFileName()")
+    fun generateBackupFileName(): String {
+        return generateTransactionsBackupFileName()
     }
 }

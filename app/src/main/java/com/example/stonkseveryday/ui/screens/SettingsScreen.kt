@@ -25,10 +25,13 @@ fun SettingsScreen(
     onSaveFeeRate: (Double) -> Unit,
     onSaveStockTaxRate: (Double) -> Unit,
     onSaveEtfTaxRate: (Double) -> Unit,
-    onBackup: () -> Unit = {},
-    onRestore: () -> Unit = {},
+    onBackupTransactions: () -> Unit = {},
+    onRestoreTransactions: () -> Unit = {},
+    onBackupSettings: () -> Unit = {},
+    onRestoreSettings: () -> Unit = {},
     onClearAll: () -> Unit = {},
-    onCalculateAllDividends: () -> Unit = {}
+    onCalculateAllDividends: () -> Unit = {},
+    onOpenColorSettings: () -> Unit = {}
 ) {
     var tokenInput by remember { mutableStateOf(currentToken) }
     var feeRateInput by remember { mutableStateOf(defaultFeeRate.toString()) }
@@ -149,6 +152,43 @@ fun SettingsScreen(
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("清除")
+                }
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            // Section: 外觀設定
+            Text(
+                text = "外觀設定",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+
+            Card(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "介面顏色客製化",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Text(
+                        text = "自訂應用程式的介面顏色，包含各個區塊和文字顏色。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                    )
+
+                    Button(
+                        onClick = onOpenColorSettings,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("自訂介面顏色")
+                    }
                 }
             }
 
@@ -275,13 +315,13 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "備份與恢復",
+                        text = "交易資料備份",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
 
                     Text(
-                        text = "備份您的交易記錄和股利資料，以便在需要時恢復。",
+                        text = "備份您的交易記錄和股利資料。",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                     )
@@ -291,17 +331,57 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedButton(
-                            onClick = onBackup,
+                            onClick = onBackupTransactions,
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("備份資料")
+                            Text("備份交易")
                         }
 
                         OutlinedButton(
-                            onClick = onRestore,
+                            onClick = onRestoreTransactions,
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("恢復資料")
+                            Text("恢復交易")
+                        }
+                    }
+                }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "個人設定備份",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Text(
+                        text = "備份您的費率設定、介面顏色等個人設定（不含 API Token）。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onBackupSettings,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("備份設定")
+                        }
+
+                        OutlinedButton(
+                            onClick = onRestoreSettings,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("恢復設定")
                         }
                     }
                 }

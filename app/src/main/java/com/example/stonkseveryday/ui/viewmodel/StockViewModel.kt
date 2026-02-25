@@ -163,21 +163,21 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 備份資料到 URI
+     * 備份交易資料到 URI
      */
-    fun backupData(uri: Uri) {
+    fun backupTransactions(uri: Uri) {
         viewModelScope.launch {
             try {
                 _isLoading.value = true
-                val success = backupManager.backupToUri(uri)
+                val success = backupManager.backupTransactionsToUri(uri)
                 if (success) {
-                    _successMessage.value = "備份成功"
+                    _successMessage.value = "交易資料備份成功"
                     _errorMessage.value = null
                 } else {
-                    _errorMessage.value = "備份失敗"
+                    _errorMessage.value = "交易資料備份失敗"
                 }
             } catch (e: Exception) {
-                _errorMessage.value = "備份失敗: ${e.message}"
+                _errorMessage.value = "交易資料備份失敗: ${e.message}"
             } finally {
                 _isLoading.value = false
             }
@@ -185,26 +185,86 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 從 URI 恢復資料
+     * 從 URI 恢復交易資料
      */
-    fun restoreData(uri: Uri, token: String = "") {
+    fun restoreTransactions(uri: Uri, token: String = "") {
         viewModelScope.launch {
             try {
                 _isLoading.value = true
-                val success = backupManager.restoreFromUri(uri, token = token)
+                val success = backupManager.restoreTransactionsFromUri(uri, token = token)
                 if (success) {
-                    _successMessage.value = "恢復成功"
+                    _successMessage.value = "交易資料恢復成功"
                     _errorMessage.value = null
                     updateWidget()
                 } else {
-                    _errorMessage.value = "恢復失敗"
+                    _errorMessage.value = "交易資料恢復失敗"
                 }
             } catch (e: Exception) {
-                _errorMessage.value = "恢復失敗: ${e.message}"
+                _errorMessage.value = "交易資料恢復失敗: ${e.message}"
             } finally {
                 _isLoading.value = false
             }
         }
+    }
+
+    /**
+     * 備份個人設定到 URI
+     */
+    fun backupSettings(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                _isLoading.value = true
+                val success = backupManager.backupSettingsToUri(uri)
+                if (success) {
+                    _successMessage.value = "個人設定備份成功"
+                    _errorMessage.value = null
+                } else {
+                    _errorMessage.value = "個人設定備份失敗"
+                }
+            } catch (e: Exception) {
+                _errorMessage.value = "個人設定備份失敗: ${e.message}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * 從 URI 恢復個人設定
+     */
+    fun restoreSettings(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                _isLoading.value = true
+                val success = backupManager.restoreSettingsFromUri(uri)
+                if (success) {
+                    _successMessage.value = "個人設定恢復成功"
+                    _errorMessage.value = null
+                } else {
+                    _errorMessage.value = "個人設定恢復失敗"
+                }
+            } catch (e: Exception) {
+                _errorMessage.value = "個人設定恢復失敗: ${e.message}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * 備份資料到 URI（舊版相容）
+     */
+    @Deprecated("請使用 backupTransactions() 或 backupSettings()")
+    fun backupData(uri: Uri) {
+        backupTransactions(uri)
+    }
+
+    /**
+     * 從 URI 恢復資料（舊版相容）
+     */
+    @Deprecated("請使用 restoreTransactions() 或 restoreSettings()")
+    fun restoreData(uri: Uri, token: String = "") {
+        restoreTransactions(uri, token)
     }
 
     /**

@@ -24,6 +24,8 @@ import com.example.stonkseveryday.widget.WidgetUpdateHelper
 import androidx.glance.appwidget.updateAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.remember
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,7 +70,18 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            StonksEverydayTheme {
+            val userPreferences = remember { UserPreferences(this) }
+            val lightColors by userPreferences.lightColorCustomization.collectAsState(
+                initial = com.example.stonkseveryday.data.model.ColorCustomization.defaultLight()
+            )
+            val darkColors by userPreferences.darkColorCustomization.collectAsState(
+                initial = com.example.stonkseveryday.data.model.ColorCustomization.defaultDark()
+            )
+
+            StonksEverydayTheme(
+                lightColors = lightColors,
+                darkColors = darkColors
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -101,23 +114,46 @@ fun StockTradingApp() {
 
     var showAddTransaction by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showColorSettings by remember { mutableStateOf(false) }
     var selectedHolding by remember { mutableStateOf<StockHolding?>(null) }
     var holdingDetails by remember { mutableStateOf<List<com.example.stonkseveryday.data.model.HoldingDetail>>(emptyList()) }
     var showExitDialog by remember { mutableStateOf(false) }
     var transactionToEdit by remember { mutableStateOf<com.example.stonkseveryday.data.model.StockTransaction?>(null) }
 
-    // Backup launcher
-    val backupLauncher = rememberLauncherForActivityResult(
+    // 顏色設定
+    val lightColors by userPreferences.lightColorCustomization.collectAsState(
+        initial = com.example.stonkseveryday.data.model.ColorCustomization.defaultLight()
+    )
+    val darkColors by userPreferences.darkColorCustomization.collectAsState(
+        initial = com.example.stonkseveryday.data.model.ColorCustomization.defaultDark()
+    )
+
+    // Transactions backup launcher
+    val backupTransactionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
-        uri?.let { viewModel.backupData(it) }
+        uri?.let { viewModel.backupTransactions(it) }
     }
 
-    // Restore launcher
-    val restoreLauncher = rememberLauncherForActivityResult(
+    // Transactions restore launcher
+    val restoreTransactionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
-        uri?.let { viewModel.restoreData(it, currentToken) }
+        uri?.let { viewModel.restoreTransactions(it, currentToken) }
+    }
+
+    // Settings backup launcher
+    val backupSettingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        uri?.let { viewModel.backupSettings(it) }
+    }
+
+    // Settings restore launcher
+    val restoreSettingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { viewModel.restoreSettings(it) }
     }
 
     // Show error/success messages
@@ -178,6 +214,42 @@ fun StockTradingApp() {
                 }
             )
         }
+        showColorSettings -> {
+            // 在顏色設定頁面，返回鍵回到設定頁
+            BackHandler {
+                showColorSettings = false
+                showSettings = true
+            }
+
+            ColorCustomizationScreen(
+                lightColors = lightColors,
+                darkColors = darkColors,
+                onNavigateBack = {
+                    showColorSettings = false
+                    showSettings = true
+                },
+                onSaveLightColors = { colors ->
+                    scope.launch {
+                        userPreferences.saveLightColorCustomization(colors)
+                    }
+                },
+                onSaveDarkColors = { colors ->
+                    scope.launch {
+                        userPreferences.saveDarkColorCustomization(colors)
+                    }
+                },
+                onResetLightColors = {
+                    scope.launch {
+                        userPreferences.resetLightColors()
+                    }
+                },
+                onResetDarkColors = {
+                    scope.launch {
+                        userPreferences.resetDarkColors()
+                    }
+                }
+            )
+        }
         showSettings -> {
             // 在設定頁面，返回鍵回到主頁
             BackHandler { showSettings = false }
@@ -208,18 +280,29 @@ fun StockTradingApp() {
                         userPreferences.saveDefaultEtfTaxRate(rate)
                     }
                 },
-                onBackup = {
-                    val fileName = com.example.stonkseveryday.data.backup.BackupManager(context).generateBackupFileName()
-                    backupLauncher.launch(fileName)
+                onBackupTransactions = {
+                    val fileName = com.example.stonkseveryday.data.backup.BackupManager(context).generateTransactionsBackupFileName()
+                    backupTransactionsLauncher.launch(fileName)
                 },
-                onRestore = {
-                    restoreLauncher.launch(arrayOf("application/json"))
+                onRestoreTransactions = {
+                    restoreTransactionsLauncher.launch(arrayOf("application/json"))
+                },
+                onBackupSettings = {
+                    val fileName = com.example.stonkseveryday.data.backup.BackupManager(context).generateSettingsBackupFileName()
+                    backupSettingsLauncher.launch(fileName)
+                },
+                onRestoreSettings = {
+                    restoreSettingsLauncher.launch(arrayOf("application/json"))
                 },
                 onClearAll = {
                     viewModel.clearAllData()
                 },
                 onCalculateAllDividends = {
                     viewModel.calculateAllDividends(currentToken)
+                },
+                onOpenColorSettings = {
+                    showSettings = false
+                    showColorSettings = true
                 }
             )
         }
