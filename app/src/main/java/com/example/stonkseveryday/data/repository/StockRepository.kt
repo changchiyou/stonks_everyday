@@ -397,13 +397,12 @@ class StockRepository(
      * - 上市股票 (TSE)：tse_XXXX.tw (例如：tse_2330.tw)
      * - 上櫃股票 (OTC)：otc_XXXX.tw (例如：otc_6488.tw)
      *
-     * Fallback 優先級（按照證券所常見處理方式）：
+     * Fallback 優先級（避免開盤前試搓價造成今日損益混亂）：
      * 1. z (最新成交價) - 盤中有成交時
-     * 2. s (試撮價) - 開盤前試撮時段
-     * 3. a (賣一價) - 盤中無成交但有委託時，優先使用賣一價
-     * 4. b (買一價) - 如果沒有賣價，才使用買一價
-     * 5. o (開盤價) - 開盤後但無其他價格時
-     * 6. y (昨收價) - 最後的選擇
+     * 2. a (賣一價) - 盤中無成交但有委託時，優先使用賣一價
+     * 3. b (買一價) - 如果沒有賣價，才使用買一價
+     * 4. o (開盤價) - 開盤後但無其他價格時
+     * 5. y (昨收價) - 開盤前或無任何資料（試搓價不使用，避免今日損益混亂）
      */
     private suspend fun getStockPriceFromTwse(stockCode: String): StockPriceResponse? = try {
         // 預設為上市股票，可根據需求調整
@@ -461,20 +460,10 @@ class StockRepository(
             priceSource = "成交價"
         }
 
-        // 策略 2: 試撮價格 (s) - 開盤前試撮時段
-        if (currentPrice == null && !stockInfo.trialMatchPrice.isNullOrEmpty()) {
-            stockInfo.trialMatchPrice.replace(",", "").toDoubleOrNull()?.let {
-                if (it > 0) {
-                    currentPrice = it
-                    priceSource = "試撮價"
-                }
-            }
-        }
-
         // 提取賣一價（不論是否用於現價，都需要記錄）
         val askPrice = parseFirstPrice(stockInfo.askPrices)
 
-        // 策略 3: 委託價 (a/b) - 盤中無成交但有委託
+        // 策略 2: 委託價 (a/b) - 盤中無成交但有委託
         // 按照證券所常見處理方式，優先使用賣一價作為即時現價
         if (currentPrice == null) {
             val bidPrice = parseFirstPrice(stockInfo.bidPrices) // 買一價
@@ -493,7 +482,7 @@ class StockRepository(
             }
         }
 
-        // 策略 4: 開盤價 (o) - 今日已開盤但無其他價格
+        // 策略 3: 開盤價 (o) - 今日已開盤但無其他價格
         if (currentPrice == null && !stockInfo.openPrice.isEmpty() && stockInfo.openPrice != "-") {
             stockInfo.openPrice.replace(",", "").toDoubleOrNull()?.let {
                 if (it > 0) {
@@ -503,7 +492,8 @@ class StockRepository(
             }
         }
 
-        // 策略 5: 昨收價 (y) - 最後的選擇（開盤前或無任何資料）
+        // 策略 4: 昨收價 (y) - 最後的選擇（開盤前或無任何資料）
+        // 注意：不使用試搓價 (s)，避免開盤前試搓造成今日損益混亂
         if (currentPrice == null) {
             currentPrice = previousClose
             priceSource = "昨收價"
