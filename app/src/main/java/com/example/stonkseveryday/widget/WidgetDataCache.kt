@@ -57,6 +57,48 @@ object WidgetDataCache {
     }
 
     /**
+     * 判斷交易時段，決定是否應該顯示今日損益
+     *
+     * @param tradeTime 交易時間 (HH:MM:SS)
+     * @return true 表示應該顯示今日損益（盤中或盤後），false 表示顯示 0（開盤前）
+     */
+    private fun shouldShowTodayProfitLoss(tradeTime: String?): Boolean {
+        // 如果沒有時間資訊，使用本地時間判斷
+        if (tradeTime.isNullOrEmpty()) {
+            val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Taipei"))
+            val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+            val minute = calendar.get(java.util.Calendar.MINUTE)
+            val timeInMinutes = hour * 60 + minute
+
+            // 09:00 之前不顯示今日損益
+            return timeInMinutes >= (9 * 60)
+        }
+
+        // 解析時間字串 (HH:MM:SS)
+        val timeParts = tradeTime.split(":")
+        if (timeParts.size < 2) {
+            return false
+        }
+
+        val hour = timeParts[0].toIntOrNull() ?: 0
+        val minute = timeParts[1].toIntOrNull() ?: 0
+        val timeValue = hour * 10000 + minute * 100 + (timeParts.getOrNull(2)?.toIntOrNull() ?: 0)
+
+        // 未開盤 (< 08:30)
+        if (timeValue < 83000) {
+            return false
+        }
+
+        // 開盤前試搓 (08:30-09:00)
+        if (timeValue >= 83000 && timeValue < 90000) {
+            return false
+        }
+
+        // 09:00 之後（包含盤中、收盤、盤後）都顯示今日損益
+        return timeValue >= 90000
+    }
+
+    /**
      * 智能計算今日損益
      * 實作跨日檢測、日期驗證等邏輯
      *
@@ -74,6 +116,14 @@ object WidgetDataCache {
         quantity: Int,
         cachedPrice: com.example.stonkseveryday.data.model.StockPriceCache?
     ): Double {
+        // 檢查交易時段：只在盤中和盤後顯示今日損益
+        if (!shouldShowTodayProfitLoss(cachedPrice?.tradeTime)) {
+            android.util.Log.d(
+                "WidgetDataCache",
+                "$code: 開盤前時段（時間:${cachedPrice?.tradeTime}），今日損益設為 0"
+            )
+            return 0.0
+        }
         // 如果沒有快取資料，無法判斷，返回簡單計算結果
         if (cachedPrice == null) {
             android.util.Log.d("WidgetDataCache", "$code: 無快取資料，使用基本計算")

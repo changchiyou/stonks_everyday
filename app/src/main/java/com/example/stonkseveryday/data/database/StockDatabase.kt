@@ -18,7 +18,7 @@ import com.example.stonkseveryday.data.model.StockTransaction
         DividendCalculationRecord::class,
         com.example.stonkseveryday.data.model.StockPriceCache::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -198,6 +198,20 @@ abstract class StockDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // 在 stock_price_cache 表中新增交易時段相關欄位
+                // tradeTime: 最新成交時間 (HH:MM:SS)
+                // tradeStatus: 交易狀態 (0 = 正常交易, 1 = 試搓)
+                database.execSQL(
+                    "ALTER TABLE stock_price_cache ADD COLUMN tradeTime TEXT DEFAULT NULL"
+                )
+                database.execSQL(
+                    "ALTER TABLE stock_price_cache ADD COLUMN tradeStatus TEXT DEFAULT NULL"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): StockDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -205,7 +219,7 @@ abstract class StockDatabase : RoomDatabase() {
                     StockDatabase::class.java,
                     "stock_database"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
                     .build()
                 INSTANCE = instance
                 instance

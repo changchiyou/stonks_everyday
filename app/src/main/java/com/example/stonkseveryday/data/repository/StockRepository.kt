@@ -195,7 +195,9 @@ class StockRepository(
                         isStale = false,
                         askPrice = cachedPrice.askPrice,
                         previousCloseDate = cachedPrice.previousCloseDate,
-                        currentPriceDate = cachedPrice.currentPriceDate
+                        currentPriceDate = cachedPrice.currentPriceDate,
+                        tradeTime = cachedPrice.tradeTime,
+                        tradeStatus = cachedPrice.tradeStatus
                     )
                 }
             }
@@ -243,7 +245,9 @@ class StockRepository(
                 isStale = true,  // 標記為過期
                 askPrice = fallbackCache.askPrice,
                 previousCloseDate = fallbackCache.previousCloseDate,
-                currentPriceDate = fallbackCache.currentPriceDate
+                currentPriceDate = fallbackCache.currentPriceDate,
+                tradeTime = fallbackCache.tradeTime,
+                tradeStatus = fallbackCache.tradeStatus
             )
         }
 
@@ -302,7 +306,9 @@ class StockRepository(
             isStale = false,
             askPrice = price.askPrice,
             previousCloseDate = finalPreviousCloseDate,
-            currentPriceDate = price.currentPriceDate
+            currentPriceDate = price.currentPriceDate,
+            tradeTime = price.tradeTime,
+            tradeStatus = price.tradeStatus
         )
         stockPriceCacheDao.insertOrUpdate(cache)
     }
@@ -528,7 +534,7 @@ class StockRepository(
 
         Log.i(
             "StockRepository",
-            "TWSE: $stockCode = $currentPrice [$priceSource] (昨收:$previousClose, 賣一:${askPrice ?: "N/A"}, 時間:${stockInfo.tradeTime}, 現價日期:$currentPriceDate, 昨收日期:$previousCloseDate)"
+            "TWSE: $stockCode = $currentPrice [$priceSource] (昨收:$previousClose, 賣一:${askPrice ?: "N/A"}, 時間:${stockInfo.tradeTime}, ts:${stockInfo.tradeStatus}, 現價日期:$currentPriceDate, 昨收日期:$previousCloseDate)"
         )
 
         return StockPriceResponse(
@@ -540,7 +546,9 @@ class StockRepository(
             timestamp = System.currentTimeMillis(),
             askPrice = askPrice,
             previousCloseDate = previousCloseDate,
-            currentPriceDate = currentPriceDate
+            currentPriceDate = currentPriceDate,
+            tradeTime = stockInfo.tradeTime,
+            tradeStatus = stockInfo.tradeStatus
         )
     }
 
@@ -576,6 +584,50 @@ class StockRepository(
     }
 
     /**
+     * 判斷交易時段，決定是否應該顯示今日損益
+     * 參考 TWSE API 回傳的 tradeTime 和 tradeStatus
+     *
+     * @param tradeTime 交易時間 (HH:MM:SS)
+     * @param tradeStatus 交易狀態 (0 = 正常交易, 1 = 試搓)
+     * @return true 表示應該顯示今日損益（盤中或盤後），false 表示顯示 0（開盤前）
+     */
+    private fun shouldShowTodayProfitLoss(tradeTime: String?, tradeStatus: String?): Boolean {
+        // 如果沒有時間資訊，使用本地時間判斷
+        if (tradeTime.isNullOrEmpty()) {
+            val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Taipei"))
+            val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+            val minute = calendar.get(java.util.Calendar.MINUTE)
+            val timeInMinutes = hour * 60 + minute
+
+            // 09:00 之前不顯示今日損益
+            return timeInMinutes >= (9 * 60)
+        }
+
+        // 解析時間字串 (HH:MM:SS)
+        val timeParts = tradeTime.split(":")
+        if (timeParts.size < 2) {
+            return false
+        }
+
+        val hour = timeParts[0].toIntOrNull() ?: 0
+        val minute = timeParts[1].toIntOrNull() ?: 0
+        val timeValue = hour * 10000 + minute * 100 + (timeParts.getOrNull(2)?.toIntOrNull() ?: 0)
+
+        // 未開盤 (< 08:30)
+        if (timeValue < 83000) {
+            return false
+        }
+
+        // 開盤前試搓 (08:30-09:00)
+        if (timeValue >= 83000 && timeValue < 90000) {
+            return false
+        }
+
+        // 09:00 之後（包含盤中、收盤、盤後）都顯示今日損益
+        return timeValue >= 90000
+    }
+
+    /**
      * 智能計算今日損益（與 WidgetDataCache 中的邏輯一致）
      * 實作跨日檢測、日期驗證等邏輯
      *
@@ -593,6 +645,14 @@ class StockRepository(
         quantity: Int,
         priceResponse: StockPriceResponse?
     ): Double {
+        // 檢查交易時段：只在盤中和盤後顯示今日損益
+        if (!shouldShowTodayProfitLoss(priceResponse?.tradeTime, priceResponse?.tradeStatus)) {
+            Log.d(
+                "StockRepository",
+                "$code: 開盤前時段（時間:${priceResponse?.tradeTime}），今日損益設為 0"
+            )
+            return 0.0
+        }
         // 如果沒有價格回應資料，無法判斷，返回簡單計算結果
         if (priceResponse == null) {
             Log.d("StockRepository", "$code: 無價格回應資料，使用基本計算")
