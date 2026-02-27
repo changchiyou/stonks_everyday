@@ -807,6 +807,22 @@ class StockRepository(
                             0.0
                         }
 
+                        // 計算今日損益（會自動檢查是否為交易日和交易時段）
+                        val todayPL = calculateTodayProfitLossForHolding(
+                            code = code,
+                            currentPrice = currentPrice,
+                            previousClose = previousClose,
+                            quantity = totalQuantity,
+                            priceResponse = stockPrice
+                        )
+
+                        // 今日漲跌幅：如果今日損益為 0（休市日或盤前），則漲跌幅也應為 0
+                        val effectiveTodayChangePercent = if (todayPL == 0.0) {
+                            0.0
+                        } else {
+                            stockPrice?.changePercent ?: 0.0
+                        }
+
                         val holding = StockHolding(
                             stockCode = code,
                             stockName = txs.first().stockName,
@@ -823,7 +839,8 @@ class StockRepository(
                             isZeroCost = isZeroCost,
                             dividendQueryStatus = dividendQueryStatus,
                             askPrice = stockPrice?.askPrice,  // 賣一價
-                            todayChangePercent = stockPrice?.changePercent ?: 0.0  // 今日漲跌幅
+                            todayChangePercent = effectiveTodayChangePercent,  // 今日漲跌幅（休市日為 0）
+                            todayProfitLoss = todayPL  // 今日損益（已考慮休市狀態）
                         )
 
                         HoldingWithPrice(holding, previousClose, stockPrice)

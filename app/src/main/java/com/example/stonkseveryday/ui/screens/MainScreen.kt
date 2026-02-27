@@ -480,11 +480,7 @@ fun HoldingItem(
                     )
                 }
 
-                // 今日損益：(現價 - 昨收價) × 持股數量
-                // 昨收價 = 現價 / (1 + 今日漲跌幅%)
-                val previousClose = holding.currentPrice / (1 + holding.todayChangePercent / 100)
-                val todayProfitLoss = (holding.currentPrice - previousClose) * holding.quantity
-
+                // 今日損益：使用 Repository 計算好的值（已考慮休市狀態）
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
                         text = "今日損益",
@@ -492,12 +488,12 @@ fun HoldingItem(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
                     Text(
-                        text = "${if (todayProfitLoss >= 0) "+" else ""}${formatCurrency(todayProfitLoss)}",
+                        text = "${if (holding.todayProfitLoss >= 0) "+" else ""}${formatCurrency(holding.todayProfitLoss)}",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = when {
-                            todayProfitLoss > 0 -> MaterialTheme.colorScheme.error  // 上漲：紅色
-                            todayProfitLoss < 0 -> MaterialTheme.colorScheme.tertiary  // 下跌：綠色
+                            holding.todayProfitLoss > 0 -> MaterialTheme.colorScheme.error  // 上漲：紅色
+                            holding.todayProfitLoss < 0 -> MaterialTheme.colorScheme.tertiary  // 下跌：綠色
                             else -> MaterialTheme.colorScheme.onSurface  // 平盤：黑色
                         }
                     )

@@ -28,5 +28,6 @@ data class StockHolding(
     val isZeroCost: Boolean = false,   // 是否達成零成本
     val dividendQueryStatus: DividendQueryStatus = DividendQueryStatus.SUCCESS, // 股利查詢狀態
     val askPrice: Double? = null,     // 即時賣一價（委託價第一檔）
-    val todayChangePercent: Double = 0.0 // 今日漲跌幅 % (相對於昨收價)
+    val todayChangePercent: Double = 0.0, // 今日漲跌幅 % (相對於昨收價)
+    val todayProfitLoss: Double = 0.0 // 今日損益（已考慮休市狀態，休市日為 0）
 )
