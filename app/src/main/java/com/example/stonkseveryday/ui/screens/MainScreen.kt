@@ -63,7 +63,8 @@ fun MainScreen(
     onIncludeDividendsChange: (Boolean) -> Unit = {},
     isRefreshing: Boolean = false,
     lastRefreshTime: Long = System.currentTimeMillis(),
-    onRefresh: () -> Unit = {}
+    onRefresh: () -> Unit = {},
+    marketStatus: String = ""
 ) {
     // 自動刷新：每 60 秒刷新一次
     LaunchedEffect(Unit) {
@@ -84,11 +85,33 @@ fun MainScreen(
                 title = {
                     Column {
                         Text("Stonks Everyday")
-                        Text(
-                            text = refreshTimeText,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = refreshTimeText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                            )
+                            if (marketStatus.isNotEmpty()) {
+                                Text(
+                                    text = "•",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f)
+                                )
+                                Text(
+                                    text = marketStatus,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = when (marketStatus) {
+                                        "開盤中" -> MaterialTheme.colorScheme.primary
+                                        "休市" -> MaterialTheme.colorScheme.error
+                                        else -> MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                                    }
+                                )
+                            }
+                        }
                     }
                 },
                 actions = {

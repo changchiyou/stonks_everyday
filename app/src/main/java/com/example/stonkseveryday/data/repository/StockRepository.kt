@@ -395,6 +395,17 @@ class StockRepository(
         null
     }
 
+    // 儲存最近一次的 TWSE API 回應（用於判斷市場狀態）
+    private var lastTwseResponse: com.example.stonkseveryday.data.api.TwseStockInfoResponse? = null
+
+    /**
+     * 取得最近一次的 TWSE API 回應
+     * 用於判斷市場狀態
+     */
+    fun getLastTwseResponse(): com.example.stonkseveryday.data.api.TwseStockInfoResponse? {
+        return lastTwseResponse
+    }
+
     /**
      * 從 TWSE 官方 API 取得盤中即時股價
      * 完全免費，無限制，交易時間內延遲約 5 秒
@@ -417,18 +428,24 @@ class StockRepository(
         val response = com.example.stonkseveryday.data.api.TwseRetrofitInstance.twseApiService
             .getStockInfo(stockCode = formattedCode)
 
+        // 儲存回應用於市場狀態判斷
+        lastTwseResponse = response
+
         if (response.code == "0000" && !response.data.isNullOrEmpty()) {
             val stockInfo = response.data.first()
-            parseTwseStockPrice(stockCode, stockInfo)
+            parseTwseStockPrice(stockCode, stockInfo, response)
         } else {
             // 可能是上櫃股票，嘗試 OTC
             val otcCode = "otc_${stockCode}.tw"
             val otcResponse = com.example.stonkseveryday.data.api.TwseRetrofitInstance.twseApiService
                 .getStockInfo(stockCode = otcCode)
 
+            // 儲存回應用於市場狀態判斷
+            lastTwseResponse = otcResponse
+
             if (otcResponse.code == "0000" && !otcResponse.data.isNullOrEmpty()) {
                 val stockInfo = otcResponse.data.first()
-                parseTwseStockPrice(stockCode, stockInfo)
+                parseTwseStockPrice(stockCode, stockInfo, otcResponse)
             } else {
                 Log.e("StockRepository", "TWSE API returned no data for $stockCode (tried both TSE and OTC)")
                 null
@@ -444,11 +461,13 @@ class StockRepository(
      *
      * @param stockCode 股票代碼
      * @param stockInfo TWSE API 回傳的股票資訊
+     * @param response TWSE API 完整回應（包含 queryTime）
      * @return 股價回應或 null
      */
     private fun parseTwseStockPrice(
         stockCode: String,
-        stockInfo: com.example.stonkseveryday.data.api.TwseStockInfo
+        stockInfo: com.example.stonkseveryday.data.api.TwseStockInfo,
+        response: com.example.stonkseveryday.data.api.TwseStockInfoResponse
     ): StockPriceResponse? {
         // 昨收價（必須有，否則無法計算漲跌）
         val previousClose = stockInfo.previousClose.replace(",", "").toDoubleOrNull()
@@ -511,25 +530,30 @@ class StockRepository(
             (change / previousClose) * 100
         } else 0.0
 
-        // 計算日期（使用台灣時區）
-        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
-        dateFormat.timeZone = java.util.TimeZone.getTimeZone("Asia/Taipei")
-        val today = dateFormat.format(java.util.Date())
+        // 計算日期（使用 TWSE API 提供的日期資訊）
+        // stockInfo.date 格式為 yyyyMMdd，例如 "20260227"
+        val tradeDateStr = stockInfo.date  // API 提供的最新成交日期
+        val currentPriceDate = try {
+            // 將 yyyyMMdd 轉換為 yyyy-MM-dd
+            "${tradeDateStr.substring(0, 4)}-${tradeDateStr.substring(4, 6)}-${tradeDateStr.substring(6, 8)}"
+        } catch (e: Exception) {
+            // 如果解析失敗，使用今天的日期
+            val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+            dateFormat.timeZone = java.util.TimeZone.getTimeZone("Asia/Taipei")
+            dateFormat.format(java.util.Date())
+        }
 
-        // 計算昨天的日期
-        val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Taipei"))
-        calendar.add(java.util.Calendar.DAY_OF_YEAR, -1)
-        val yesterday = dateFormat.format(calendar.time)
-
-        // 根據價格來源決定日期
-        val currentPriceDate = today  // 現價一定是今天的
-        val previousCloseDate = if (priceSource == "昨收價") {
-            // 如果現價使用昨收價，表示還沒開盤，previousClose 其實是前天的
-            calendar.add(java.util.Calendar.DAY_OF_YEAR, -1)  // 再往前一天
+        // 計算 previousClose 的日期（最新成交日的前一個交易日）
+        val previousCloseDate = try {
+            val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+            dateFormat.timeZone = java.util.TimeZone.getTimeZone("Asia/Taipei")
+            val tradeDate = dateFormat.parse(currentPriceDate)
+            val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Taipei"))
+            calendar.time = tradeDate!!
+            calendar.add(java.util.Calendar.DAY_OF_YEAR, -1)
             dateFormat.format(calendar.time)
-        } else {
-            // 正常情況，previousClose 是昨天的
-            yesterday
+        } catch (e: Exception) {
+            null
         }
 
         Log.i(
@@ -585,46 +609,12 @@ class StockRepository(
 
     /**
      * 判斷交易時段，決定是否應該顯示今日損益
-     * 參考 TWSE API 回傳的 tradeTime 和 tradeStatus
+     * 使用 MarketStatusHelper 來判斷（會檢查是否為交易日）
      *
-     * @param tradeTime 交易時間 (HH:MM:SS)
-     * @param tradeStatus 交易狀態 (0 = 正常交易, 1 = 試搓)
-     * @return true 表示應該顯示今日損益（盤中或盤後），false 表示顯示 0（開盤前）
+     * @return true 表示應該顯示今日損益（盤中或盤後），false 表示顯示 0（開盤前或休市）
      */
-    private fun shouldShowTodayProfitLoss(tradeTime: String?, tradeStatus: String?): Boolean {
-        // 如果沒有時間資訊，使用本地時間判斷
-        if (tradeTime.isNullOrEmpty()) {
-            val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Taipei"))
-            val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
-            val minute = calendar.get(java.util.Calendar.MINUTE)
-            val timeInMinutes = hour * 60 + minute
-
-            // 09:00 之前不顯示今日損益
-            return timeInMinutes >= (9 * 60)
-        }
-
-        // 解析時間字串 (HH:MM:SS)
-        val timeParts = tradeTime.split(":")
-        if (timeParts.size < 2) {
-            return false
-        }
-
-        val hour = timeParts[0].toIntOrNull() ?: 0
-        val minute = timeParts[1].toIntOrNull() ?: 0
-        val timeValue = hour * 10000 + minute * 100 + (timeParts.getOrNull(2)?.toIntOrNull() ?: 0)
-
-        // 未開盤 (< 08:30)
-        if (timeValue < 83000) {
-            return false
-        }
-
-        // 開盤前試搓 (08:30-09:00)
-        if (timeValue >= 83000 && timeValue < 90000) {
-            return false
-        }
-
-        // 09:00 之後（包含盤中、收盤、盤後）都顯示今日損益
-        return timeValue >= 90000
+    private fun shouldShowTodayProfitLoss(): Boolean {
+        return com.example.stonkseveryday.utils.MarketStatusHelper.shouldShowTodayProfitLoss(lastTwseResponse)
     }
 
     /**
@@ -645,11 +635,12 @@ class StockRepository(
         quantity: Int,
         priceResponse: StockPriceResponse?
     ): Double {
-        // 檢查交易時段：只在盤中和盤後顯示今日損益
-        if (!shouldShowTodayProfitLoss(priceResponse?.tradeTime, priceResponse?.tradeStatus)) {
+        // 檢查交易時段：只在盤中和盤後顯示今日損益（會自動檢查是否為交易日）
+        if (!shouldShowTodayProfitLoss()) {
+            val marketStatus = com.example.stonkseveryday.utils.MarketStatusHelper.getMarketStatus(lastTwseResponse)
             Log.d(
                 "StockRepository",
-                "$code: 開盤前時段（時間:${priceResponse?.tradeTime}），今日損益設為 0"
+                "$code: 非交易時段（狀態:$marketStatus），今日損益設為 0"
             )
             return 0.0
         }

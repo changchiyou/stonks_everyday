@@ -39,6 +39,9 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     private val _lastRefreshTime = MutableStateFlow(System.currentTimeMillis())
     val lastRefreshTime: StateFlow<Long> = _lastRefreshTime.asStateFlow()
 
+    private val _marketStatus = MutableStateFlow("載入中...")
+    val marketStatus: StateFlow<String> = _marketStatus.asStateFlow()
+
     private val _refreshTrigger = MutableStateFlow(0L)
 
     init {
@@ -458,7 +461,12 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
 
                 // 等待一下讓 API 呼叫完成
                 kotlinx.coroutines.delay(1000)
-                android.util.Log.d("StockViewModel", "股價刷新完成")
+
+                // 更新市場狀態
+                val twseResponse = repository.getLastTwseResponse()
+                val status = com.example.stonkseveryday.utils.MarketStatusHelper.getMarketStatus(twseResponse)
+                _marketStatus.value = status
+                android.util.Log.d("StockViewModel", "股價刷新完成，市場狀態: $status")
             } catch (e: Exception) {
                 android.util.Log.e("StockViewModel", "刷新股價失敗", e)
             } finally {

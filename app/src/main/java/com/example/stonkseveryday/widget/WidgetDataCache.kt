@@ -57,45 +57,49 @@ object WidgetDataCache {
     }
 
     /**
+     * 判斷今天是否為交易日
+     * 使用快取的股價資料來判斷（檢查 currentPriceDate 是否為今天）
+     *
+     * @param cachedPrice 快取的股價資料
+     * @return true 表示今天是交易日
+     */
+    private fun isTodayTradingDay(cachedPrice: com.example.stonkseveryday.data.model.StockPriceCache?): Boolean {
+        if (cachedPrice == null || cachedPrice.currentPriceDate == null) {
+            // 沒有快取或沒有日期資訊，保守判斷（週一到週五才是交易日）
+            val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Taipei"))
+            val dayOfWeek = calendar.get(java.util.Calendar.DAY_OF_WEEK)
+            return dayOfWeek in java.util.Calendar.MONDAY..java.util.Calendar.FRIDAY
+        }
+
+        // 取得今天的日期
+        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+        dateFormat.timeZone = java.util.TimeZone.getTimeZone("Asia/Taipei")
+        val today = dateFormat.format(java.util.Date())
+
+        // 如果快取的 currentPriceDate = 今天，表示今天有交易
+        return cachedPrice.currentPriceDate == today
+    }
+
+    /**
      * 判斷交易時段，決定是否應該顯示今日損益
      *
-     * @param tradeTime 交易時間 (HH:MM:SS)
-     * @return true 表示應該顯示今日損益（盤中或盤後），false 表示顯示 0（開盤前）
+     * @param cachedPrice 快取的股價資料（用於判斷是否為交易日）
+     * @return true 表示應該顯示今日損益（盤中或盤後），false 表示顯示 0（開盤前或休市）
      */
-    private fun shouldShowTodayProfitLoss(tradeTime: String?): Boolean {
-        // 如果沒有時間資訊，使用本地時間判斷
-        if (tradeTime.isNullOrEmpty()) {
-            val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Taipei"))
-            val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
-            val minute = calendar.get(java.util.Calendar.MINUTE)
-            val timeInMinutes = hour * 60 + minute
-
-            // 09:00 之前不顯示今日損益
-            return timeInMinutes >= (9 * 60)
-        }
-
-        // 解析時間字串 (HH:MM:SS)
-        val timeParts = tradeTime.split(":")
-        if (timeParts.size < 2) {
+    private fun shouldShowTodayProfitLoss(cachedPrice: com.example.stonkseveryday.data.model.StockPriceCache?): Boolean {
+        // 先檢查是否為交易日
+        if (!isTodayTradingDay(cachedPrice)) {
             return false
         }
 
-        val hour = timeParts[0].toIntOrNull() ?: 0
-        val minute = timeParts[1].toIntOrNull() ?: 0
-        val timeValue = hour * 10000 + minute * 100 + (timeParts.getOrNull(2)?.toIntOrNull() ?: 0)
+        // 交易日的時段判斷
+        val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Taipei"))
+        val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+        val minute = calendar.get(java.util.Calendar.MINUTE)
+        val timeInMinutes = hour * 60 + minute
 
-        // 未開盤 (< 08:30)
-        if (timeValue < 83000) {
-            return false
-        }
-
-        // 開盤前試搓 (08:30-09:00)
-        if (timeValue >= 83000 && timeValue < 90000) {
-            return false
-        }
-
-        // 09:00 之後（包含盤中、收盤、盤後）都顯示今日損益
-        return timeValue >= 90000
+        // 09:00 之前不顯示今日損益（包含集合競價）
+        return timeInMinutes >= 9 * 60
     }
 
     /**
@@ -116,11 +120,12 @@ object WidgetDataCache {
         quantity: Int,
         cachedPrice: com.example.stonkseveryday.data.model.StockPriceCache?
     ): Double {
-        // 檢查交易時段：只在盤中和盤後顯示今日損益
-        if (!shouldShowTodayProfitLoss(cachedPrice?.tradeTime)) {
+        // 檢查交易時段：只在盤中和盤後顯示今日損益（會自動檢查是否為交易日）
+        if (!shouldShowTodayProfitLoss(cachedPrice)) {
+            val isTradingDay = isTodayTradingDay(cachedPrice)
             android.util.Log.d(
                 "WidgetDataCache",
-                "$code: 開盤前時段（時間:${cachedPrice?.tradeTime}），今日損益設為 0"
+                "$code: 非交易時段（是否交易日:$isTradingDay, currentPriceDate:${cachedPrice?.currentPriceDate}），今日損益設為 0"
             )
             return 0.0
         }

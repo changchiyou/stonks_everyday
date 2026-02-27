@@ -48,7 +48,24 @@ data class TwseStockInfoResponse(
     @SerializedName("rtmessage")
     val message: String,
     @SerializedName("rtcode")
-    val code: String // "0000" 表示成功
+    val code: String, // "0000" 表示成功
+    @SerializedName("queryTime")
+    val queryTime: TwseQueryTime? = null
+)
+
+/**
+ * TWSE API 查詢時間資訊
+ * 用於判斷市場開盤狀態
+ */
+data class TwseQueryTime(
+    @SerializedName("sysDate")
+    val sysDate: String, // 系統日期 (yyyyMMdd)，例如: 20260227
+    @SerializedName("sysTime")
+    val sysTime: String, // 系統時間 (HH:mm:ss)，例如: 10:22:34
+    @SerializedName("stockInfoItem")
+    val stockInfoItem: Int? = null,
+    @SerializedName("stockInfo")
+    val stockInfo: Int? = null
 )
 
 data class TwseStockInfo(

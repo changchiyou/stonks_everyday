@@ -109,6 +109,7 @@ fun StockTradingApp() {
     val includeDividends by userPreferences.includeDividends.collectAsState(initial = true)
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val lastRefreshTime by viewModel.lastRefreshTime.collectAsState()
+    val marketStatus by viewModel.marketStatus.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val successMessage by viewModel.successMessage.collectAsState()
 
@@ -344,7 +345,8 @@ fun StockTradingApp() {
                 lastRefreshTime = lastRefreshTime,
                 onRefresh = {
                     viewModel.refreshStockPrices()
-                }
+                },
+                marketStatus = marketStatus
             )
         }
     }
